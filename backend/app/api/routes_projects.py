@@ -125,15 +125,17 @@ def list_projects():
 def create_project(data: ProjectCreate):
     proj_id = uuid.uuid4().hex[:10]
     now = datetime.utcnow().isoformat()
-    # Default to placing logo in bottom right with 18% size and high legibility
+    # Default to placing logo centered over watermark with optimal scale and luxury drop shadow
     default_settings_obj = LogoPlacement(
-        x=0.85,
-        y=0.85,
-        scale=0.20,
+        x=0.50,
+        y=0.48,
+        scale=0.42,
         opacity=1.0,
         shadow=True,
-        shadow_blur=6.0,
-        shadow_opacity=0.4,
+        shadow_blur=10.0,
+        shadow_opacity=0.60,
+        shadow_offset_x=2.0,
+        shadow_offset_y=6.0,
     )
     default_settings = default_settings_obj.model_dump_json()
     

@@ -32,17 +32,17 @@ import { CompareModal } from '../processing/CompareModal';
 import { api } from '../../services/api';
 
 const DEFAULT_PLACEMENT: LogoPlacement = {
-  x: 0.86,
-  y: 0.86,
-  scale: 0.20,
+  x: 0.50,
+  y: 0.48,
+  scale: 0.42,
   rotation: 0,
   opacity: 1.0,
   blend_mode: 'normal',
   shadow: true,
-  shadow_blur: 6.0,
-  shadow_opacity: 0.4,
-  shadow_offset_x: 4.0,
-  shadow_offset_y: 4.0,
+  shadow_blur: 10.0,
+  shadow_opacity: 0.60,
+  shadow_offset_x: 2.0,
+  shadow_offset_y: 6.0,
   lock_aspect_ratio: true,
 };
 
@@ -100,6 +100,8 @@ export const SimpleStudio: React.FC = () => {
   const [customLogoItem, setCustomLogoItem] = useState<LogoItem | null>(null);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [logoSuccessMsg, setLogoSuccessMsg] = useState<string | null>(null);
+  const [isUpdatingSingle, setIsUpdatingSingle] = useState(false);
+  const [singleUpdateSuccess, setSingleUpdateSuccess] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logoUploadInputRef = useRef<HTMLInputElement>(null);
@@ -683,16 +685,76 @@ export const SimpleStudio: React.FC = () => {
     document.body.removeChild(link);
   };
 
+  // Download single active photo
+  const handleDownloadSinglePhoto = () => {
+    if (!currentImage) return;
+    const url = currentImage.processed_url || currentImage.url;
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `rebranded_${currentImage.original_filename || 'saree.jpg'}`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Update/Save single photo rebrand
+  const handleUpdateSinglePhoto = async () => {
+    if (!project || !currentImage || isUpdatingSingle) return;
+    try {
+      setIsUpdatingSingle(true);
+      setErrorMessage(null);
+      const placementToSave = photoPlacements[currentImage.id] || currentPlacement;
+      const masksToSave = photoMasks[currentImage.id] || [];
+
+      // 1. Save config
+      await api.updateImageConfig(project.id, currentImage.id, {
+        custom_settings: placementToSave,
+        mask_data: masksToSave,
+      });
+
+      // 2. Apply logo to this photo
+      const updated = await api.applyLogo(project.id, currentImage.id);
+      const cacheBusted: ImageItem = {
+        ...updated,
+        processed_url: updated.processed_url
+          ? `${updated.processed_url.split('?')[0]}?t=${Date.now()}`
+          : updated.processed_url,
+        thumbnail_url: updated.thumbnail_url
+          ? `${updated.thumbnail_url.split('?')[0]}?t=${Date.now()}`
+          : updated.thumbnail_url,
+      };
+
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              images: prev.images?.map((img) =>
+                img.id === currentImage.id ? cacheBusted : img
+              ),
+            }
+          : prev
+      );
+
+      const idx = images.findIndex((img) => img.id === currentImage.id);
+      setSingleUpdateSuccess(`✓ Photo #${idx + 1} updated successfully!`);
+      setTimeout(() => setSingleUpdateSuccess(null), 3500);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to update photo');
+    } finally {
+      setIsUpdatingSingle(false);
+    }
+  };
+
   // Compass Presets for current photo
   const applyCompass = (pos: 'top-left' | 'top-right' | 'center' | 'bottom-left' | 'bottom-right') => {
     let x = 0.5;
-    let y = 0.5;
+    let y = 0.48;
     const m = 0.12;
     if (pos === 'top-left') { x = m; y = m; }
     else if (pos === 'top-right') { x = 1 - m; y = m; }
     else if (pos === 'bottom-left') { x = m; y = 1 - m; }
     else if (pos === 'bottom-right') { x = 1 - m; y = 1 - m; }
-    else { x = 0.5; y = 0.5; }
+    else { x = 0.5; y = 0.48; }
 
     handleChangePlacement({ ...currentPlacement, x, y });
     setActiveCanvasTool('move-logo');
@@ -1027,6 +1089,67 @@ export const SimpleStudio: React.FC = () => {
                 ) : null}
               </div>
 
+              {/* Single Photo Action Bar (Tactile & Senior Friendly) */}
+              {currentImage && (
+                <div className="bg-charcoal-800 border-t border-surface-border px-3 py-2 flex items-center justify-between gap-2 shrink-0 z-10 flex-wrap sm:flex-nowrap">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs sm:text-sm font-black text-white px-2.5 py-1 rounded-lg bg-charcoal-700 border border-surface-border shrink-0">
+                      Photo #{images.findIndex((i) => i.id === currentImage.id) + 1} of {images.length}
+                    </span>
+                    <span className="text-[11px] font-bold text-savecus-300 hidden sm:inline truncate">
+                      {currentImage.original_filename}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                    {/* Update / Save this photo */}
+                    <button
+                      type="button"
+                      disabled={isUpdatingSingle}
+                      onClick={handleUpdateSinglePhoto}
+                      className="min-h-[42px] px-3 sm:px-4 py-1.5 rounded-xl bg-savecus-500 hover:bg-savecus-400 text-charcoal-950 text-xs sm:text-sm font-black flex items-center gap-1.5 shadow-md active:scale-95 transition-all"
+                      title="Apply new logo position or healing to this photo only"
+                    >
+                      {isUpdatingSingle ? (
+                        <div className="w-3.5 h-3.5 border-2 border-charcoal-950 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3.5 h-3.5 fill-current" />
+                      )}
+                      <span>Update Photo #{images.findIndex((i) => i.id === currentImage.id) + 1}</span>
+                    </button>
+
+                    {/* Reset this photo */}
+                    <button
+                      type="button"
+                      onClick={handleResetPhoto}
+                      className="min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-rose-900/40 border border-surface-border hover:border-rose-500/50 text-xs font-bold text-slate-300 hover:text-rose-300 flex items-center gap-1 active:scale-95 transition-all"
+                      title="Reset only this photo back to original"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+                      <span className="hidden sm:inline">Reset</span>
+                    </button>
+
+                    {/* Download this photo */}
+                    <button
+                      type="button"
+                      onClick={handleDownloadSinglePhoto}
+                      className="min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-charcoal-600 border border-surface-border text-xs font-bold text-slate-200 flex items-center gap-1 active:scale-95 transition-all"
+                      title="Download this single photo directly"
+                    >
+                      <Download className="w-3.5 h-3.5 text-savecus-400" />
+                      <span className="hidden sm:inline">Download</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Single Photo Feedback Banner */}
+              {singleUpdateSuccess && (
+                <div className="bg-emerald-500 text-charcoal-950 font-black text-xs sm:text-sm px-4 py-2 text-center animate-fadeIn shadow">
+                  {singleUpdateSuccess}
+                </div>
+              )}
+
               {/* Bottom Thumbnail Strip */}
               <div className="h-16 sm:h-20 border-t border-surface-border bg-charcoal-400 px-3 sm:px-4 flex items-center justify-between shrink-0 gap-2 sm:gap-3 w-full">
                 <div className="flex items-center gap-2 overflow-x-auto py-1 min-w-0 flex-1">
@@ -1340,13 +1463,14 @@ export const SimpleStudio: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => applyCompass('center')}
-                      className={`w-full min-h-[44px] py-2 px-3 rounded-xl border-2 text-xs sm:text-sm font-extrabold transition-all active:scale-95 ${
+                      className={`w-full min-h-[48px] py-2.5 px-3 rounded-xl border-2 text-xs sm:text-sm font-extrabold transition-all active:scale-95 flex items-center justify-center gap-2 ${
                         isCenter
-                          ? 'bg-savecus-500 text-charcoal-950 border-savecus-400 shadow-md ring-2 ring-savecus-500/40'
-                          : 'bg-charcoal-100 hover:bg-charcoal-50 border-surface-border text-slate-300'
+                          ? 'bg-savecus-500 text-charcoal-950 border-savecus-400 shadow-md ring-2 ring-savecus-500/40 font-black'
+                          : 'bg-savecus-500/15 hover:bg-savecus-500/25 border-savecus-500/50 text-savecus-300'
                       }`}
                     >
-                      ⏺ Center
+                      <span className="text-base">⏺</span>
+                      <span>Center (Over Watermark) ★</span>
                     </button>
                   </div>
 
@@ -1358,46 +1482,57 @@ export const SimpleStudio: React.FC = () => {
                     </div>
 
                     {/* Quick preset buttons */}
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                       <button
                         type="button"
-                        onClick={() => handleChangePlacement({ ...currentPlacement, scale: 0.15 })}
-                        className={`min-h-[46px] py-2 px-2 rounded-xl text-xs sm:text-sm font-bold border-2 transition-all ${
-                          Math.abs(currentPlacement.scale - 0.15) < 0.02
+                        onClick={() => handleChangePlacement({ ...currentPlacement, scale: 0.30 })}
+                        className={`min-h-[44px] py-2 px-1.5 rounded-xl text-xs font-bold border-2 transition-all ${
+                          Math.abs(currentPlacement.scale - 0.30) < 0.02
                             ? 'bg-savecus-500 text-charcoal-950 border-savecus-400 font-black'
                             : 'bg-charcoal-100 text-slate-300 border-surface-border hover:border-slate-400'
                         }`}
                       >
-                        Small 15%
+                        30% Small
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleChangePlacement({ ...currentPlacement, scale: 0.20 })}
-                        className={`min-h-[46px] py-2 px-2 rounded-xl text-xs sm:text-sm font-bold border-2 transition-all ${
-                          Math.abs(currentPlacement.scale - 0.20) < 0.02
+                        onClick={() => handleChangePlacement({ ...currentPlacement, scale: 0.36 })}
+                        className={`min-h-[44px] py-2 px-1.5 rounded-xl text-xs font-bold border-2 transition-all ${
+                          Math.abs(currentPlacement.scale - 0.36) < 0.02
+                            ? 'bg-savecus-500 text-charcoal-950 border-savecus-400 font-black'
+                            : 'bg-charcoal-100 text-slate-300 border-surface-border hover:border-slate-400'
+                        }`}
+                      >
+                        36% Square ★
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleChangePlacement({ ...currentPlacement, scale: 0.46 })}
+                        className={`min-h-[44px] py-2 px-1.5 rounded-xl text-xs font-bold border-2 transition-all ${
+                          Math.abs(currentPlacement.scale - 0.46) < 0.02
                             ? 'bg-savecus-500 text-charcoal-950 border-savecus-400 font-black'
                             : 'bg-savecus-500/15 text-savecus-300 border-savecus-500/50 hover:border-savecus-500'
                         }`}
                       >
-                        Medium 20% ★
+                        46% 9:16 Tall ★
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleChangePlacement({ ...currentPlacement, scale: 0.28 })}
-                        className={`min-h-[46px] py-2 px-2 rounded-xl text-xs sm:text-sm font-bold border-2 transition-all ${
-                          Math.abs(currentPlacement.scale - 0.28) < 0.02
+                        onClick={() => handleChangePlacement({ ...currentPlacement, scale: 0.52 })}
+                        className={`min-h-[44px] py-2 px-1.5 rounded-xl text-xs font-bold border-2 transition-all ${
+                          Math.abs(currentPlacement.scale - 0.52) < 0.02
                             ? 'bg-savecus-500 text-charcoal-950 border-savecus-400 font-black'
                             : 'bg-charcoal-100 text-slate-300 border-surface-border hover:border-slate-400'
                         }`}
                       >
-                        Large 28%
+                        52% Large
                       </button>
                     </div>
 
                     <input
                       type="range"
-                      min="0.08"
-                      max="0.60"
+                      min="0.10"
+                      max="0.65"
                       step="0.01"
                       value={currentPlacement.scale}
                       onChange={(e) => handleChangePlacement({ ...currentPlacement, scale: parseFloat(e.target.value) })}
@@ -1676,6 +1811,16 @@ export const SimpleStudio: React.FC = () => {
                     <p className="text-[11px] text-slate-400 text-center">
                       Downloads directly to your device Downloads folder.
                     </p>
+
+                    {/* Re-process / Re-run Batch with Updates */}
+                    <button
+                      onClick={handleRunBatch}
+                      disabled={isProcessingBatch}
+                      className="w-full min-h-[46px] py-2.5 px-3 rounded-xl bg-charcoal-200 hover:bg-charcoal-100 border border-surface-border text-xs sm:text-sm font-bold text-savecus-300 hover:text-white flex items-center justify-center gap-2 active:scale-98"
+                    >
+                      <Play className="w-4 h-4 fill-current text-savecus-500" />
+                      <span>⚡ Re-process All {images.length} Photos</span>
+                    </button>
 
                     {currentImage && (
                       <button

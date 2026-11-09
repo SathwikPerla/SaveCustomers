@@ -7,6 +7,16 @@
 - **Visual Truth Over Numerical Scores**:
   - In earlier iterations, mathematical metrics like MSE or PSNR reported high fidelity for `DirectionalSeamInpainter`. However, when applied to real multicolor floral saree patterns (`media_1794142087814_eb8f64df.jpg`), it created ugly vertical barcode stripes because vertical column-wise interpolation fails on horizontal floral prints.
   - Good signal = Visual naturalness: zero blur, zero barcode streaks, zero muddy artifacts, and seamless fabric texture preservation.
+- **Zero Saree Disturbance ("Mix of Both" Principle)**:
+  - Wiping out a large rectangular box with inpainting on authentic silk/cotton weave will always synthesize artificial pixels, leaving a visible boundary disturbance where the old logo was removed.
+  - The optimal solution ("Do a mix of both"):
+    1. Direct superposition: Place the Junnu Mukka Sarees logo directly over the old watermark with optimal scale (`0.46` on 9:16 tall, `0.36` on square/landscape).
+    2. Zero fabric tampering outside the logo: 100% of the saree fabric outside the new logo is completely untouched original camera pixels.
+    3. Micro-targeted inpainting: Any inpainting or neutralization is clipped strictly inside the footprint of the new logo so it never touches surrounding saree fabric.
+    4. Soft luxury drop shadow (`blur=10, opacity=0.60`) provides 100% complete occlusion of whatever was underneath while making the 3D logo pop with majestic elegance.
+- **Single-Photo Manual Tweak Freedom**:
+  - While batch processing handles 20–30 photos automatically, a senior user needs the freedom to pick 1 or 2 specific photos and nudge the logo or heal an artifact without fear of ruining the other 28 photos.
+  - One-tap `[ ⚡ Update Photo #X ]` saves only that photo; `[ ↺ Reset Photo #X ]` reverts only that photo; `[ SAVE ALL TO COMPUTER (ZIP) ]` exports the entire batch seamlessly.
 - **Snapseed Healing Parity**:
   - Google Snapseed's Healing brush is the gold standard for watermark erasure:
     1. Select brush size.

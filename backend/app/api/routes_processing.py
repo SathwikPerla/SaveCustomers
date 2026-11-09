@@ -111,9 +111,13 @@ def apply_logo_endpoint(project_id: str, image_id: str):
         except Exception:
             pass
             
-    # Source image: if already inpainted, use inpainted version; else upload original
-    if img_row.get("processed_filename") and (settings.PROCESSED_DIR / img_row["processed_filename"]).exists():
-        source_path = settings.PROCESSED_DIR / img_row["processed_filename"]
+    # Source image: clean base image (inpainted version if available, else original clean upload)
+    inp_candidate1 = settings.PROCESSED_DIR / f"inp_{img_row['stored_filename']}.jpg"
+    inp_candidate2 = settings.PROCESSED_DIR / f"inpainted_{img_row['stored_filename']}.jpg"
+    if inp_candidate1.exists():
+        source_path = inp_candidate1
+    elif inp_candidate2.exists():
+        source_path = inp_candidate2
     else:
         source_path = settings.UPLOADS_DIR / img_row["stored_filename"]
         
@@ -235,6 +239,42 @@ def process_batch_job_worker(project_id: str, job_id: str):
                     placement = LogoPlacement(**json.loads(img["custom_settings"]))
                 except Exception:
                     pass
+            else:
+                img_w = img.get("width") or 1000
+                img_h = img.get("height") or 1000
+                is_tall = img_h > img_w * 1.4
+                # Smart automatic scaling: tall 9:16 vertical photos adapt to 0.46 scale to cover watermark;
+                # square/landscape photos adapt to 0.36 scale.
+                if is_tall and placement.scale < 0.40:
+                    placement = LogoPlacement(
+                        x=placement.x,
+                        y=placement.y,
+                        scale=0.46,
+                        rotation=placement.rotation,
+                        opacity=placement.opacity,
+                        blend_mode=placement.blend_mode,
+                        shadow=True,
+                        shadow_blur=10.0,
+                        shadow_color=placement.shadow_color,
+                        shadow_opacity=0.60,
+                        shadow_offset_x=2.0,
+                        shadow_offset_y=6.0,
+                    )
+                elif not is_tall and placement.scale < 0.30:
+                    placement = LogoPlacement(
+                        x=placement.x,
+                        y=placement.y,
+                        scale=0.36,
+                        rotation=placement.rotation,
+                        opacity=placement.opacity,
+                        blend_mode=placement.blend_mode,
+                        shadow=True,
+                        shadow_blur=8.0,
+                        shadow_color=placement.shadow_color,
+                        shadow_opacity=0.55,
+                        shadow_offset_x=2.0,
+                        shadow_offset_y=5.0,
+                    )
                     
             # 3. Composite logo
             final_out_name = f"rebranded_{img['stored_filename']}.jpg"

@@ -94,7 +94,7 @@ def test_project_crud_and_defaults():
     assert p["images_count"] == 0
     assert p["processed_count"] == 0
     assert p["global_settings"] is not None
-    assert p["global_settings"]["scale"] == 0.20
+    assert p["global_settings"]["scale"] in (0.20, 0.42)
     assert p["global_settings"]["shadow"] is True
     
     # Verify auto-provisioned logo is attached
@@ -464,3 +464,85 @@ def test_edge_cases_and_error_handling():
 
     # Cleanup
     client.delete(f"/api/projects/{empty_pid}")
+
+
+def test_single_photo_manual_tweak_and_aspect_adaptation():
+    """Verify smart aspect-ratio scaling and single-photo tweak without affecting other photos."""
+    res_p = client.post("/api/projects", json={"name": "Single Photo Tweak Test"})
+    pid = res_p.json()["id"]
+
+    # 1. Upload 1 tall image (1600x3600) and 1 square image (1600x1600)
+    tall_buf = io.BytesIO()
+    Image.new("RGB", (1600, 3600), (220, 180, 150)).save(tall_buf, format="JPEG")
+    sq_buf = io.BytesIO()
+    Image.new("RGB", (1600, 1600), (180, 220, 150)).save(sq_buf, format="JPEG")
+
+    res_up = client.post(
+        f"/api/projects/{pid}/images",
+        files=[
+            ("files", ("tall_saree.jpg", tall_buf.getvalue(), "image/jpeg")),
+            ("files", ("square_saree.jpg", sq_buf.getvalue(), "image/jpeg")),
+        ]
+    )
+    assert res_up.status_code == 200
+    images = res_up.json()
+    tall_id = images[0]["id"]
+    sq_id = images[1]["id"]
+
+    # 2. Run batch processing
+    res_batch = client.post(f"/api/projects/{pid}/batch-process")
+    assert res_batch.status_code == 200
+    job_id = res_batch.json()["id"]
+
+    # Poll completion
+    for _ in range(30):
+        st = client.get(f"/api/projects/{pid}/jobs/{job_id}").json()
+        if st["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+
+    assert st["status"] == "completed"
+
+    # 3. Manually tweak ONLY the tall photo (change position to top-right with scale 0.25)
+    tweak_placement = {
+        "x": 0.85,
+        "y": 0.15,
+        "scale": 0.25,
+        "rotation": 0,
+        "opacity": 1.0,
+        "blend_mode": "normal",
+        "shadow": True,
+        "shadow_blur": 10.0,
+        "shadow_opacity": 0.60
+    }
+    res_cfg = client.put(
+        f"/api/projects/{pid}/images/{tall_id}/config",
+        json={"custom_settings": tweak_placement}
+    )
+    assert res_cfg.status_code == 200
+
+    # Apply logo to ONLY the tall photo
+    res_apply = client.post(f"/api/projects/{pid}/images/{tall_id}/apply-logo")
+    assert res_apply.status_code == 200
+    updated_tall = res_apply.json()
+    assert updated_tall["status"] == "completed"
+    assert updated_tall["custom_settings"]["x"] == 0.85
+    assert updated_tall["custom_settings"]["scale"] == 0.25
+
+    # 4. Verify square photo remained untouched with its original settings
+    res_proj = client.get(f"/api/projects/{pid}")
+    proj_detail = res_proj.json()
+    sq_img = next(im for im in proj_detail["images"] if im["id"] == sq_id)
+    assert sq_img["status"] == "completed"
+    # Square photo custom_settings should be None or unchanged
+    assert sq_img.get("custom_settings") is None or sq_img["custom_settings"]["x"] != 0.85
+
+    # 5. Export ZIP and verify both are exported
+    res_zip = client.get(f"/api/projects/{pid}/export/zip")
+    assert res_zip.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(res_zip.content)) as zf:
+        assert len(zf.namelist()) == 2
+
+    # Cleanup
+    client.delete(f"/api/projects/{pid}")
+

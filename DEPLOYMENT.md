@@ -28,37 +28,39 @@ The app includes **Automated Background Matting & Transparency**:
 Currently, the local tunnel runs from your MacBook. When the MacBook sleeps or closes, the tunnel drops.
 To make it permanently online 24/7 so your father can use it anytime anywhere:
 
-### 🏆 Recommended Method: Railway.app (Takes 3 Minutes, Zero DevOps)
+### 🌐 Primary Cloud Deployment: Render.com (100% Free Tier)
 
-Railway automatically builds the included `Dockerfile` and gives you a permanent, fast SSL URL (e.g. `https://junnu-sarees.up.railway.app`).
+Your code is already pushed to GitHub at: `https://github.com/SathwikPerla/SaveCustomers`
 
-#### Step 1: Create a GitHub Repository
-1. On your Mac terminal, initialize and push this repo to your GitHub account:
-   ```bash
-   git remote add origin https://github.com/<your-username>/savecus-studio.git
-   git branch -M main
-   git push -u origin main
-   ```
+Follow these 4 simple steps to deploy on Render's free tier:
 
-#### Step 2: Deploy on Railway
-1. Go to [railway.app](https://railway.app) and sign up/log in with GitHub.
-2. Click **"+ New Project"** ➔ **"Deploy from GitHub repo"**.
-3. Select your `savecus-studio` repository.
-4. Railway will automatically detect the `Dockerfile` and start building the container.
-5. Click on the project tile ➔ **Settings** ➔ **Networking** ➔ Click **"Generate Domain"**.
-   - You will get a permanent URL like `https://savecus-studio-production.up.railway.app`.
-   - *(Optional)* You can also connect a custom domain like `studio.junnumukkasarees.com`.
-6. *(Optional Data Persistence)*: Under the service settings, click **Add Volume** and mount `/app/backend/data` so uploaded logos persist forever even when restarting.
+1. **Sign in**: Go to [dashboard.render.com](https://dashboard.render.com/) and sign in with GitHub.
+2. **Create New Web Service**:
+   - Click the blue **"New +"** button in top-right ➔ Select **"Web Service"**.
+   - Under "Connect a repository", search for and select **`SathwikPerla/SaveCustomers`**.
+3. **Configure**:
+   - **Name**: `savecus-studio` (or `junnu-sarees-studio`)
+   - **Region**: Choose the closest region (e.g., Singapore or Oregon)
+   - **Environment**: **Docker** (Render will auto-detect the root `Dockerfile` and `render.yaml`)
+   - **Instance Type**: **Free** ($0 / month)
+4. **Deploy**:
+   - Click **"Create Web Service"**.
+   - Render will build the Vite frontend, set up OpenCV and Python 3.11, and start the app.
+   - Within 3 minutes, you will get a permanent public link like:
+     **`https://savecus-studio.onrender.com`**
+   - That link is online 24/7 with a free SSL certificate! Send it to your father's phone.
+
+*(Note on Render Free Tier: If no one visits for 15 minutes, Render sleeps the container to save energy. When your father opens the link, it automatically wakes up in ~40 seconds).*
 
 ---
 
-### 🌐 Alternative Method: Render.com (Free Tier)
+### 🏆 Alternative: Railway.app (Never Sleeps, $5 Monthly Credit)
 
-1. Sign up at [render.com](https://render.com).
-2. Click **"New +"** ➔ **"Web Service"** ➔ Connect your GitHub repo.
-3. Render automatically detects the root `render.yaml` configuration and `Dockerfile`.
-4. Click **Deploy Web Service**.
-5. You will get a permanent URL like `https://savecus-rebrand-studio.onrender.com`.
+If you prefer an instance that never goes to sleep:
+1. Go to [railway.app](https://railway.app) and sign up with GitHub.
+2. Click **"+ New Project"** ➔ **"Deploy from GitHub repo"** ➔ Select `SathwikPerla/SaveCustomers`.
+3. Railway automatically detects the included `Dockerfile` and `railway.json`.
+4. Under Settings ➔ Networking, click **"Generate Domain"** for an instant permanent URL like `https://savecustomers.up.railway.app`.
 
 ---
 
