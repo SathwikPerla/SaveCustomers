@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: savecus-rebrand-studio
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 8000
+

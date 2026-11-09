@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #121212;
+    color: #ffffff;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color-scheme: dark;
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #181714;
+}
+::-webkit-scrollbar-thumb {
+  background: #36342D;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #F1C04C;
+}
+
+/* Transparency Checkerboard with subtle warm tone */
+.bg-checkerboard {
+  background-color: #1E1D19;
+  background-image: 
+    linear-gradient(45deg, #141310 25%, transparent 25%), 
+    linear-gradient(-45deg, #141310 25%, transparent 25%), 
+    linear-gradient(45deg, transparent 75%, #141310 75%), 
+    linear-gradient(-45deg, transparent 75%, #141310 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+}
+
+.bg-checkerboard-light {
+  background-color: #FFFFFF;
+  background-image: 
+    linear-gradient(45deg, #FBF4DC 25%, transparent 25%), 
+    linear-gradient(-45deg, #FBF4DC 25%, transparent 25%), 
+    linear-gradient(45deg, transparent 75%, #FBF4DC 75%), 
+    linear-gradient(-45deg, transparent 75%, #FBF4DC 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+}

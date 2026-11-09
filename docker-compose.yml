@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  savecus-studio:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      - PORT=8000
+    restart: unless-stopped
+
