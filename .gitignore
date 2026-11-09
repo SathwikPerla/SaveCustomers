@@ -32,10 +32,18 @@ backend/data/*.db
 backend/data/*.db-wal
 backend/data/*.db-shm
 
-# Local Batch Image Folders
+# Local Batch Image Folders & zips
 the batch/
 the batch updated/
 the main logoi and font/
+*.zip
+*.log
 
-# Keep default logos tracked
-!backend/data/logos/
+# Ignore generated project logos, keep core default logos
+backend/data/logos/*_*.*
+!backend/data/logos/junnu_mukka_transparent.png
+!backend/data/logos/junnu_mukka_logo.png
+!backend/data/logos/default_savecus_logo.png
+!backend/data/logos/gold_savecus_logo.png
+!backend/data/logos/.gitkeep
+
