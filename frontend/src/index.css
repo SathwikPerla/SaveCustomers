@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 @layer base {
+  html, body, #root {
+    overscroll-behavior-x: none;
+  }
   body {
     background-color: #121212;
     color: #ffffff;

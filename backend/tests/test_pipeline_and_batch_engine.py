@@ -546,3 +546,60 @@ def test_single_photo_manual_tweak_and_aspect_adaptation():
     # Cleanup
     client.delete(f"/api/projects/{pid}")
 
+
+def test_image_rotation_and_individual_deletion():
+    # 1. Create project
+    res_proj = client.post("/api/projects", json={"name": "Rotation and Deletion Test"})
+    assert res_proj.status_code == 200
+    pid = res_proj.json()["id"]
+
+    # 2. Upload a horizontal image: 800 width, 600 height
+    horiz_img = Image.new("RGB", (800, 600), color=(180, 70, 90))
+    buf = io.BytesIO()
+    horiz_img.save(buf, "JPEG")
+    buf.seek(0)
+
+    res_up = client.post(
+        f"/api/projects/{pid}/images",
+        files=[("files", ("horiz_saree.jpg", buf.getvalue(), "image/jpeg"))]
+    )
+    assert res_up.status_code == 200
+    images = res_up.json()
+    img_id = images[0]["id"]
+    assert images[0]["width"] == 800
+    assert images[0]["height"] == 600
+
+    # 3. Rotate 90 degrees clockwise -> Should become 600 width, 800 height
+    res_rot1 = client.post(f"/api/projects/{pid}/images/{img_id}/rotate?degrees=90")
+    assert res_rot1.status_code == 200
+    data_rot1 = res_rot1.json()
+    assert data_rot1["width"] == 600
+    assert data_rot1["height"] == 800
+
+    # Verify on-disk dimensions
+    filename = data_rot1["url"].split("/")[-1]
+    stored_path = settings.UPLOADS_DIR / filename
+    assert stored_path.exists()
+    with Image.open(stored_path) as disk_img:
+        assert disk_img.size == (600, 800)
+
+    # 4. Rotate 90 degrees clockwise again -> Should become 800 width, 600 height
+    res_rot2 = client.post(f"/api/projects/{pid}/images/{img_id}/rotate?degrees=90")
+    assert res_rot2.status_code == 200
+    data_rot2 = res_rot2.json()
+    assert data_rot2["width"] == 800
+    assert data_rot2["height"] == 600
+
+    # 5. Test individual image deletion ('X' button)
+    res_del = client.delete(f"/api/projects/{pid}/images/{img_id}")
+    assert res_del.status_code == 200
+    assert res_del.json()["id"] == img_id
+
+    # Verify project has 0 images
+    res_detail = client.get(f"/api/projects/{pid}").json()
+    assert len(res_detail["images"]) == 0
+
+    # Cleanup
+    client.delete(f"/api/projects/{pid}")
+
+

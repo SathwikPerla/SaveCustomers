@@ -85,3 +85,32 @@ When turning this workflow into an Antigravity custom skill (`rebrand-studio-pip
   2. `inpainting_service.py` with `SnapseedHealingInpainter` (360° isotropic Telea/NS diffusion + exemplar patch synthesis).
   3. `StudioCanvas.tsx` with touch brush, size slider, compass presets, and auto-heal on release.
   4. PWA manifest for 1-tap mobile installation.
+
+---
+
+## 5. Touch-Friendly Ergonomics, Orientation Control & Session Persistence
+
+### 1. Serial Numbering in Upload Order:
+- Every photo thumbnail features a bold, high-contrast `#1`, `#2`... `#N` serial badge in the top-left corner.
+- The active photo highlights with an electric gold badge (`#X`) and shows `Photo #X of N` in the main workspace.
+
+### 2. Individual Photo Deletion ('X' Button):
+- A tactile circular 'X' button (`w-6 h-6`, 24px) sits in the top-right of every thumbnail with a confirmation check so accidental taps don't delete files.
+- Removes mistakenly uploaded photos from the batch without resetting any other photo in the session.
+- Also available as `[ 🗑️ Remove Photo ]` in the single-photo action bar.
+
+### 3. Trackpad & Mobile Swipe Navigation Prevention:
+- Set `overscroll-behavior-x: none;` on `html, body, #root` in `frontend/src/index.css`.
+- Completely prevents macOS two-finger horizontal trackpad swipes and mobile horizontal swipe-backs from accidentally triggering browser history navigation.
+
+### 4. Full Session Persistence (Survives Reopen / Refresh):
+- `savecus_active_project_id`: Current active project automatically reloads.
+- `savecus_selected_image_id`: Reopens the exact photo the user was working on.
+- `savecus_placements_${projectId}`: Stores per-photo custom placements immediately in `localStorage` and debounce-syncs to the database.
+
+### 5. Photo Orientation & 90° Clockwise Rotation:
+- `POST /api/projects/{project_id}/images/{image_id}/rotate?degrees=90`:
+  - Rotates disk image with PIL (`expand=True`), regenerates 360px thumbnail, updates DB `width` and `height`, and rotates cached inpaint/processed images.
+  - Automatically adapts the logo scale: `0.46` for tall 9:16 portrait photos, `0.36` for square or wide landscape photos.
+  - Accessible via both the bottom action bar (`[ 🔄 Rotate 90° ↻ ]`) and the "Logo & Position" side control panel card.
+

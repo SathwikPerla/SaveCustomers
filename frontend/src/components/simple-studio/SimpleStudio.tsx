@@ -10,6 +10,7 @@ import {
   AlertCircle, 
   Play, 
   RotateCcw, 
+  RotateCw,
   Trash2, 
   Wand2, 
   SplitSquareVertical, 
@@ -30,6 +31,10 @@ import { Project, ImageItem, LogoItem, LogoPlacement, MaskRegion } from '../../t
 import { StudioCanvas } from '../editor/StudioCanvas';
 import { CompareModal } from '../processing/CompareModal';
 import { api } from '../../services/api';
+
+const LS_PROJECT_KEY = 'savecus_active_project_id';
+const LS_IMAGE_KEY = 'savecus_selected_image_id';
+const LS_PLACEMENTS_KEY = 'savecus_placements';
 
 const DEFAULT_PLACEMENT: LogoPlacement = {
   x: 0.50,
@@ -102,6 +107,7 @@ export const SimpleStudio: React.FC = () => {
   const [logoSuccessMsg, setLogoSuccessMsg] = useState<string | null>(null);
   const [isUpdatingSingle, setIsUpdatingSingle] = useState(false);
   const [singleUpdateSuccess, setSingleUpdateSuccess] = useState<string | null>(null);
+  const [isRotating, setIsRotating] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logoUploadInputRef = useRef<HTMLInputElement>(null);
@@ -113,25 +119,53 @@ export const SimpleStudio: React.FC = () => {
         setLoading(true);
         const projects = await api.listProjects();
         if (projects.length > 0) {
-          const latest = await api.getProject(projects[0].id);
-          setProject(latest);
-          if (latest.images && latest.images.length > 0) {
-            setSelectedImageId(latest.images[0].id);
+          // 1. Try to find saved project from localStorage
+          const savedProjectId = localStorage.getItem(LS_PROJECT_KEY);
+          let targetProject = projects.find((p) => p.id === savedProjectId);
+          // If saved project does not exist or has 0 images, prefer latest project with images
+          if (!targetProject || targetProject.images_count === 0) {
+            const projectWithImages = projects.find((p) => p.images_count > 0);
+            targetProject = projectWithImages || targetProject || projects[0];
+          }
+
+          const detailed = await api.getProject(targetProject.id);
+          setProject(detailed);
+          try {
+            localStorage.setItem(LS_PROJECT_KEY, detailed.id);
+          } catch {}
+
+          if (detailed.images && detailed.images.length > 0) {
+            // Restore saved image ID or default to first image
+            const savedImageId = localStorage.getItem(LS_IMAGE_KEY);
+            const foundImage = detailed.images.find((i) => i.id === savedImageId);
+            const chosenId = foundImage ? foundImage.id : detailed.images[0].id;
+            setSelectedImageId(chosenId);
+            try {
+              localStorage.setItem(LS_IMAGE_KEY, chosenId);
+            } catch {}
+
+            // Restore cached placements from localStorage
+            let cachedPlacements: Record<string, LogoPlacement> = {};
+            try {
+              const raw = localStorage.getItem(`${LS_PLACEMENTS_KEY}_${detailed.id}`);
+              if (raw) cachedPlacements = JSON.parse(raw);
+            } catch {}
+
             const initialPlacements: Record<string, LogoPlacement> = {};
             const initialMasks: Record<string, MaskRegion[]> = {};
-            latest.images.forEach((img) => {
-              initialPlacements[img.id] = img.custom_settings || latest.global_settings || DEFAULT_PLACEMENT;
+            detailed.images.forEach((img) => {
+              initialPlacements[img.id] = cachedPlacements[img.id] || img.custom_settings || detailed.global_settings || DEFAULT_PLACEMENT;
               initialMasks[img.id] = img.mask_data || [];
             });
             setPhotoPlacements(initialPlacements);
             setPhotoMasks(initialMasks);
-            if (latest.images.some((i) => i.status === 'completed')) {
+            if (detailed.images.some((i) => i.status === 'completed')) {
               setIsCompleted(true);
             }
           }
-          if (latest.logo) {
-            const orig = (latest.logo.original_filename || '').toLowerCase();
-            const url = (latest.logo.url || '').toLowerCase();
+          if (detailed.logo) {
+            const orig = (detailed.logo.original_filename || '').toLowerCase();
+            const url = (detailed.logo.url || '').toLowerCase();
             if (orig.includes('junnu') || url.includes('junnu')) {
               setActiveLogoChoice('junnu_mukka');
             } else if (orig.includes('gold') || url.includes('gold')) {
@@ -140,13 +174,16 @@ export const SimpleStudio: React.FC = () => {
               setActiveLogoChoice('black');
             } else {
               setActiveLogoChoice('custom');
-              setCustomLogoItem(latest.logo);
+              setCustomLogoItem(detailed.logo);
             }
           }
         } else {
           const fresh = await api.createProject('My Photos Batch', 'Auto-created quick rebrand batch');
           const detailed = await api.getProject(fresh.id);
           setProject(detailed);
+          try {
+            localStorage.setItem(LS_PROJECT_KEY, detailed.id);
+          } catch {}
         }
       } catch (err: any) {
         setErrorMessage(err.message || 'Failed to initialize session');
@@ -159,6 +196,7 @@ export const SimpleStudio: React.FC = () => {
 
   const images = project?.images || [];
   const currentImage = images.find((i) => i.id === selectedImageId) || images[0] || null;
+  const currentImageIndex = images.findIndex((i) => i.id === currentImage?.id);
 
   // Active photo's independent placement, masks, and undo stack
   const currentPlacement: LogoPlacement = (currentImage && photoPlacements[currentImage.id])
@@ -176,13 +214,107 @@ export const SimpleStudio: React.FC = () => {
   const canUndo = (currentHistory.past && currentHistory.past.length > 0) || (currentMasks.length > 0 && !autoHealOnRelease);
   const canRedo = Boolean(currentHistory.future && currentHistory.future.length > 0);
 
-  // Update placement for current photo only
+  // Select an image and persist to localStorage
+  const handleSelectImage = (imgId: string) => {
+    setSelectedImageId(imgId);
+    try {
+      localStorage.setItem(LS_IMAGE_KEY, imgId);
+    } catch {}
+  };
+
+  // Update placement for current photo only (persisted in state & localStorage)
   const handleChangePlacement = (newPlacement: LogoPlacement) => {
-    if (!currentImage) return;
-    setPhotoPlacements((prev) => ({
-      ...prev,
-      [currentImage.id]: newPlacement,
-    }));
+    if (!currentImage || !project) return;
+    setPhotoPlacements((prev) => {
+      const updated = {
+        ...prev,
+        [currentImage.id]: newPlacement,
+      };
+      try {
+        localStorage.setItem(`${LS_PLACEMENTS_KEY}_${project.id}`, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  // Remove individual photo from batch
+  const handleDeleteImage = async (imageId: string) => {
+    if (!project) return;
+    try {
+      await api.deleteImage(project.id, imageId);
+      const remaining = images.filter((img) => img.id !== imageId);
+      setProject((prev) => (prev ? { ...prev, images: remaining } : prev));
+
+      // Clean up local placements and masks
+      setPhotoPlacements((prev) => {
+        const copy = { ...prev };
+        delete copy[imageId];
+        try {
+          localStorage.setItem(`${LS_PLACEMENTS_KEY}_${project.id}`, JSON.stringify(copy));
+        } catch {}
+        return copy;
+      });
+      setPhotoMasks((prev) => {
+        const copy = { ...prev };
+        delete copy[imageId];
+        return copy;
+      });
+
+      // If active photo was deleted, select next or first
+      if (selectedImageId === imageId) {
+        const nextId = remaining[0]?.id || null;
+        setSelectedImageId(nextId);
+        try {
+          if (nextId) localStorage.setItem(LS_IMAGE_KEY, nextId);
+          else localStorage.removeItem(LS_IMAGE_KEY);
+        } catch {}
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to remove image');
+    }
+  };
+
+  // Rotate current photo 90 degrees clockwise (swaps portrait/landscape)
+  const handleRotateCurrentPhoto = async () => {
+    if (!project || !currentImage || isRotating) return;
+    try {
+      setIsRotating(true);
+      setErrorMessage(null);
+      const rotated = await api.rotateImage(project.id, currentImage.id, 90);
+      const cacheBusted: ImageItem = {
+        ...rotated,
+        url: `${rotated.url.split('?')[0]}?t=${Date.now()}`,
+        thumbnail_url: `${rotated.thumbnail_url.split('?')[0]}?t=${Date.now()}`,
+        processed_url: rotated.processed_url
+          ? `${rotated.processed_url.split('?')[0]}?t=${Date.now()}`
+          : rotated.processed_url,
+      };
+
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              images: prev.images?.map((img) =>
+                img.id === currentImage.id ? cacheBusted : img
+              ),
+            }
+          : prev
+      );
+
+      // Auto-adapt scale when switching between vertical and horizontal
+      const isNowVertical = rotated.height > rotated.width;
+      const cur = photoPlacements[currentImage.id] || currentPlacement;
+      const adaptedScale = isNowVertical ? 0.46 : 0.36;
+      handleChangePlacement({ ...cur, scale: adaptedScale });
+
+      const idx = images.findIndex((img) => img.id === currentImage.id);
+      setSingleUpdateSuccess(`✓ Photo #${idx + 1} rotated 90° (${isNowVertical ? 'Vertical 9:16' : 'Horizontal'})`);
+      setTimeout(() => setSingleUpdateSuccess(null), 3000);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to rotate image');
+    } finally {
+      setIsRotating(false);
+    }
   };
 
   // Handle Photo Upload
@@ -207,7 +339,7 @@ export const SimpleStudio: React.FC = () => {
       const updated = await api.getProject(project.id);
       setProject(updated);
       if (updated.images && updated.images.length > 0) {
-        setSelectedImageId(updated.images[0].id);
+        handleSelectImage(updated.images[0].id);
         const newPlacements: Record<string, LogoPlacement> = { ...photoPlacements };
         const newMasks: Record<string, MaskRegion[]> = { ...photoMasks };
         updated.images.forEach((img) => {
@@ -238,6 +370,10 @@ export const SimpleStudio: React.FC = () => {
       const fresh = await api.createProject(`Batch ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
       const detailed = await api.getProject(fresh.id);
       setProject(detailed);
+      try {
+        localStorage.setItem(LS_PROJECT_KEY, detailed.id);
+        localStorage.removeItem(LS_IMAGE_KEY);
+      } catch {}
       setSelectedImageId(null);
       setPhotoPlacements({});
       setPhotoMasks({});
@@ -656,23 +792,6 @@ export const SimpleStudio: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentImage, photoHistory, photoMasks, isHealing, autoHealOnRelease]);
-
-  // Remove single photo from batch
-  const handleDeleteImage = async (imgId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!project) return;
-    if (!window.confirm('Remove this photo from the batch?')) return;
-    try {
-      await api.deleteImage(project.id, imgId);
-      const remaining = (project.images || []).filter((i) => i.id !== imgId);
-      setProject({ ...project, images: remaining });
-      if (selectedImageId === imgId) {
-        setSelectedImageId(remaining.length > 0 ? remaining[0].id : null);
-      }
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to remove photo');
-    }
-  };
 
   // Download All Photos (ZIP) directly to computer
   const handleDownloadZip = () => {
@@ -1093,15 +1212,32 @@ export const SimpleStudio: React.FC = () => {
               {currentImage && (
                 <div className="bg-charcoal-800 border-t border-surface-border px-3 py-2 flex items-center justify-between gap-2 shrink-0 z-10 flex-wrap sm:flex-nowrap">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xs sm:text-sm font-black text-white px-2.5 py-1 rounded-lg bg-charcoal-700 border border-surface-border shrink-0">
-                      Photo #{images.findIndex((i) => i.id === currentImage.id) + 1} of {images.length}
+                    <span className="text-xs sm:text-sm font-black text-white px-2.5 py-1 rounded-lg bg-charcoal-700 border border-surface-border shrink-0 flex items-center gap-1.5 shadow">
+                      <span className="w-2 h-2 rounded-full bg-savecus-500 animate-pulse" />
+                      <span>Photo #{currentImageIndex + 1} of {images.length}</span>
                     </span>
                     <span className="text-[11px] font-bold text-savecus-300 hidden sm:inline truncate">
-                      {currentImage.original_filename}
+                      {currentImage.height > currentImage.width ? '↕ Vertical 9:16' : '↔ Horizontal'} • {currentImage.width}×{currentImage.height}px
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+                    {/* Rotate 90 degrees */}
+                    <button
+                      type="button"
+                      disabled={isRotating}
+                      onClick={handleRotateCurrentPhoto}
+                      className="min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-charcoal-600 border border-surface-border text-xs sm:text-sm font-bold text-slate-200 flex items-center gap-1.5 active:scale-95 transition-all shadow-sm"
+                      title="Rotate this photo 90° clockwise (swaps portrait/landscape)"
+                    >
+                      {isRotating ? (
+                        <div className="w-3.5 h-3.5 border-2 border-savecus-400 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <RotateCw className="w-3.5 h-3.5 text-savecus-400" />
+                      )}
+                      <span>Rotate 90° ↻</span>
+                    </button>
+
                     {/* Update / Save this photo */}
                     <button
                       type="button"
@@ -1115,7 +1251,7 @@ export const SimpleStudio: React.FC = () => {
                       ) : (
                         <Sparkles className="w-3.5 h-3.5 fill-current" />
                       )}
-                      <span>Update Photo #{images.findIndex((i) => i.id === currentImage.id) + 1}</span>
+                      <span>Update Photo #{currentImageIndex + 1}</span>
                     </button>
 
                     {/* Reset this photo */}
@@ -1127,6 +1263,21 @@ export const SimpleStudio: React.FC = () => {
                     >
                       <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
                       <span className="hidden sm:inline">Reset</span>
+                    </button>
+
+                    {/* Delete / Remove this photo */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm(`Remove Photo #${currentImageIndex + 1} from this batch?`)) {
+                          handleDeleteImage(currentImage.id);
+                        }
+                      }}
+                      className="min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-rose-900/50 border border-surface-border hover:border-rose-500/50 text-xs font-bold text-slate-300 hover:text-rose-300 flex items-center gap-1 active:scale-95 transition-all"
+                      title="Remove this photo from the batch"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span className="hidden sm:inline">Remove</span>
                     </button>
 
                     {/* Download this photo */}
@@ -1150,38 +1301,66 @@ export const SimpleStudio: React.FC = () => {
                 </div>
               )}
 
-              {/* Bottom Thumbnail Strip */}
-              <div className="h-16 sm:h-20 border-t border-surface-border bg-charcoal-400 px-3 sm:px-4 flex items-center justify-between shrink-0 gap-2 sm:gap-3 w-full">
+              {/* Bottom Thumbnail Strip with Serial Numbers and X Delete Buttons */}
+              <div className="h-20 sm:h-24 border-t border-surface-border bg-charcoal-400 px-3 sm:px-4 flex items-center justify-between shrink-0 gap-2 sm:gap-3 w-full">
                 <div className="flex items-center gap-2 overflow-x-auto py-1 min-w-0 flex-1">
                   {images.map((img, idx) => {
                     const isVertical = img.height > img.width;
+                    const isSelected = img.id === currentImage?.id;
                     return (
-                      <button
+                      <div
                         key={img.id}
-                        onClick={() => setSelectedImageId(img.id)}
-                        className={`relative w-16 h-12 sm:w-20 sm:h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-all ${
-                          img.id === currentImage?.id
-                            ? 'border-savecus-500 scale-105 shadow-lg'
-                            : 'border-surface-border opacity-70 hover:opacity-100'
+                        onClick={() => handleSelectImage(img.id)}
+                        className={`relative w-20 h-16 sm:w-24 sm:h-18 rounded-xl overflow-hidden shrink-0 border-2 cursor-pointer transition-all ${
+                          isSelected
+                            ? 'border-savecus-500 scale-105 shadow-xl ring-2 ring-savecus-500/50 z-10'
+                            : 'border-surface-border opacity-75 hover:opacity-100 hover:border-slate-400'
                         }`}
                       >
                         <img
                           src={img.processed_url || img.thumbnail_url}
-                          alt=""
+                          alt={`Photo #${idx + 1}`}
                           className="w-full h-full object-cover"
                         />
-                        <span className="absolute bottom-1 right-1 bg-charcoal-900/80 text-[9px] sm:text-[10px] text-white px-1 rounded font-mono">
+
+                        {/* 1. Bold High-Contrast Serial Number Badge */}
+                        <div
+                          className={`absolute top-1 left-1 px-1.5 py-0.5 rounded-md text-[11px] sm:text-xs font-black shadow-md z-10 flex items-center justify-center leading-none ${
+                            isSelected
+                              ? 'bg-savecus-500 text-charcoal-950 ring-1 ring-charcoal-950 font-black'
+                              : 'bg-charcoal-950/90 text-white border border-white/20'
+                          }`}
+                        >
                           #{idx + 1}
+                        </div>
+
+                        {/* 2. Tactile X Delete Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Remove Photo #${idx + 1} from this batch?`)) {
+                              handleDeleteImage(img.id);
+                            }
+                          }}
+                          className="absolute top-1 right-1 w-6 h-6 rounded-full bg-charcoal-950/90 hover:bg-rose-600 text-slate-300 hover:text-white flex items-center justify-center shadow-lg border border-white/20 transition-all z-20 active:scale-90"
+                          title={`Remove Photo #${idx + 1}`}
+                        >
+                          <X className="w-3.5 h-3.5 stroke-[3]" />
+                        </button>
+
+                        {/* 3. Orientation Indicator */}
+                        <span className="absolute bottom-1 left-1 bg-charcoal-950/80 text-[8px] sm:text-[9px] text-savecus-300 px-1 rounded font-bold">
+                          {isVertical ? '↕ 9:16' : '↔ Wide'}
                         </span>
-                        <span className="absolute top-1 left-1 bg-charcoal-900/80 text-[8px] text-savecus-300 px-1 rounded font-bold">
-                          {isVertical ? '↕ 9:16' : '↔ 16:9'}
-                        </span>
+
+                        {/* 4. Completed Status Badge */}
                         {img.status === 'completed' && (
-                          <div className="absolute top-1 right-1 bg-emerald-500 text-charcoal-900 rounded-full p-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5" />
+                          <div className="absolute bottom-1 right-1 bg-emerald-500 text-charcoal-950 rounded-full p-0.5 shadow-md">
+                            <CheckCircle2 className="w-3 h-3 stroke-[3]" />
                           </div>
                         )}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -1404,6 +1583,35 @@ export const SimpleStudio: React.FC = () => {
                     <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs sm:text-sm font-semibold">
                       <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                       <span>{logoSuccessMsg}</span>
+                    </div>
+                  )}
+
+                  {/* Photo Orientation & Rotate 90° Clockwise */}
+                  {currentImage && (
+                    <div className="pt-2 border-t border-surface-border">
+                      <div className="flex items-center justify-between text-xs sm:text-sm text-slate-300 mb-2">
+                        <span className="font-bold flex items-center gap-1.5 text-white">
+                          <RotateCw className="w-3.5 h-3.5 text-savecus-400" />
+                          Photo Orientation
+                        </span>
+                        <span className="px-2.5 py-1 rounded-md bg-charcoal-100 text-[11px] font-black text-savecus-300 border border-surface-border">
+                          {currentImage.height > currentImage.width ? '↕ Vertical 9:16' : '↔ Horizontal'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isRotating}
+                        onClick={handleRotateCurrentPhoto}
+                        className="w-full min-h-[46px] py-2.5 px-3 rounded-xl bg-charcoal-100 hover:bg-charcoal-50 border-2 border-surface-border hover:border-savecus-400 text-xs sm:text-sm font-bold text-slate-200 hover:text-white flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm"
+                        title="Rotate this photo 90° clockwise (swaps portrait/landscape)"
+                      >
+                        {isRotating ? (
+                          <div className="w-4 h-4 border-2 border-savecus-400 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <RotateCw className="w-4 h-4 text-savecus-400" />
+                        )}
+                        <span>🔄 Rotate Photo 90° Clockwise (Swap Orientation)</span>
+                      </button>
                     </div>
                   )}
 

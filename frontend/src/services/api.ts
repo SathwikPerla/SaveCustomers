@@ -76,6 +76,12 @@ export const api = {
     });
   },
 
+  async rotateImage(projectId: string, imageId: string, degrees: number = 90): Promise<ImageItem> {
+    return fetchJson<ImageItem>(`${API_BASE}/projects/${projectId}/images/${imageId}/rotate?degrees=${degrees}`, {
+      method: 'POST',
+    });
+  },
+
   async updateImageConfig(
     projectId: string,
     imageId: string,
