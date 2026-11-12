@@ -24,32 +24,23 @@ export const CompareModal: React.FC<CompareModalProps> = ({
   const handleMove = (clientX: number) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const pos = Math.max(0, Math.min(100, (x / rect.width) * 100));
+    const pos = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
     setSliderPosition(pos);
   };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (isDragging && e.touches[0]) {
-      handleMove(e.touches[0].clientX);
-    }
+  const onPointerDown = (e: React.PointerEvent) => {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    handleMove(e.clientX);
   };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      handleMove(e.clientX);
-    }
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (isDragging) handleMove(e.clientX);
   };
-
-  useEffect(() => {
-    const handleMouseUp = () => setIsDragging(false);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => window.removeEventListener('mouseup', handleMouseUp);
-  }, []);
+  const onPointerUp = () => setIsDragging(false);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-charcoal-900/90 backdrop-blur-md animate-in fade-in">
-      <div className="bg-charcoal-200 border border-surface-border rounded-3xl w-full max-w-4xl flex flex-col max-h-[90vh] shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-charcoal-900/90 backdrop-blur-md animate-in fade-in">
+      <div className="bg-charcoal-200 border border-surface-border rounded-3xl w-full max-w-4xl flex flex-col max-h-[96vh] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="p-4 border-b border-surface-border flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -64,7 +55,7 @@ export const CompareModal: React.FC<CompareModalProps> = ({
                 </span>
               </h3>
               <p className="text-xs text-slate-300">
-                Drag the divider handle horizontally to inspect background inpainting and branding fidelity
+                Drag left / right to compare before and after
               </p>
             </div>
           </div>
@@ -93,43 +84,36 @@ export const CompareModal: React.FC<CompareModalProps> = ({
         {/* Split Comparison Viewer */}
         <div
           ref={containerRef}
-          onMouseMove={handleMouseMove}
-          onTouchMove={handleTouchMove}
-          className="relative flex-1 min-h-[420px] bg-charcoal-400 flex items-center justify-center overflow-hidden cursor-ew-resize select-none"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          style={{ touchAction: 'none' }}
+          className="relative flex-1 min-h-[55vh] sm:min-h-[420px] bg-charcoal-400 overflow-hidden cursor-ew-resize select-none"
         >
-          {/* After Image (Background full) */}
+          {/* After image (full) */}
           <img
             src={afterUrl}
             alt="Rebranded Result"
+            draggable={false}
             className="absolute inset-0 w-full h-full object-contain pointer-events-none"
           />
 
-          {/* Before Image (Clipped overlay) */}
-          <div
-            className="absolute inset-0 overflow-hidden pointer-events-none"
-            style={{ width: `${sliderPosition}%` }}
-          >
-            <img
-              src={beforeUrl}
-              alt="Original Image"
-              className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-              style={{
-                width: containerRef.current?.offsetWidth || '100%',
-                maxWidth: 'none',
-              }}
-            />
-          </div>
+          {/* Before image (same size, revealed from the left by clip-path) */}
+          <img
+            src={beforeUrl}
+            alt="Original Image"
+            draggable={false}
+            className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+            style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}
+          />
 
-          {/* Slider Line & Handle */}
+          {/* Slider line & handle */}
           <div
             className="absolute top-0 bottom-0 w-0.5 bg-savecus-500 shadow-2xl z-20 flex items-center justify-center pointer-events-none"
             style={{ left: `${sliderPosition}%` }}
           >
-            <div
-              onMouseDown={() => setIsDragging(true)}
-              onTouchStart={() => setIsDragging(true)}
-              className="pointer-events-auto w-9 h-9 rounded-full bg-savecus-500 text-charcoal-900 shadow-xl flex items-center justify-center cursor-ew-resize active:scale-110 transition-transform"
-            >
+            <div className="w-11 h-11 rounded-full bg-savecus-500 text-charcoal-900 shadow-xl flex items-center justify-center">
               <SplitSquareVertical className="w-5 h-5" />
             </div>
           </div>

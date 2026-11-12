@@ -11,7 +11,8 @@ interface StudioCanvasProps {
   onChangePlacement: (newPlacement: LogoPlacement) => void;
   maskRegions?: MaskRegion[];
   onAddMaskRegion?: (region: MaskRegion) => void;
-  editorMode?: 'placement' | 'mask';
+  editorMode?: 'placement' | 'mask' | 'view';
+  showLogo?: boolean;
   activeMaskTool?: 'rect' | 'brush';
   brushSize?: number;
   autoHealOnRelease?: boolean;
@@ -27,6 +28,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
   maskRegions = [],
   onAddMaskRegion,
   editorMode = 'placement',
+  showLogo = true,
   activeMaskTool = 'brush',
   brushSize = 30,
   autoHealOnRelease = true,
@@ -127,14 +129,14 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
 
   // Attach transformer to logo when in placement mode
   useEffect(() => {
-    if (editorMode === 'placement' && trRef.current && logoNodeRef.current && logo) {
+    if (editorMode === 'placement' && showLogo && trRef.current && logoNodeRef.current && logo) {
       trRef.current.nodes([logoNodeRef.current]);
       trRef.current.getLayer()?.batchDraw();
     } else if (trRef.current) {
       trRef.current.nodes([]);
       trRef.current.getLayer()?.batchDraw();
     }
-  }, [editorMode, logo, logoStatus]);
+  }, [editorMode, logo, logoStatus, showLogo]);
 
   // Handle Wheel Zoom
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
@@ -493,7 +495,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
           </Group>
 
           {/* Interactive Replacement Logo */}
-          {logo && logoImg && (
+          {showLogo && logo && logoImg && (
             <KonvaImage
               ref={logoNodeRef}
               image={logoImg}
@@ -529,7 +531,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
           )}
 
           {/* Konva Transformer for Logo - Senior-friendly large handles & high contrast */}
-          {editorMode === 'placement' && (
+          {editorMode === 'placement' && showLogo && (
             <Transformer
               ref={trRef}
               keepRatio={placement.lock_aspect_ratio}
@@ -539,13 +541,13 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
                 'bottom-left',
                 'bottom-right',
               ]}
-              rotateAnchorOffset={28}
+              rotateAnchorOffset={containerSize.width < 640 ? 40 : 28}
               borderStroke="#eab308"
               borderStrokeWidth={2}
               anchorFill="#ffffff"
               anchorStroke="#b45309"
               anchorStrokeWidth={2}
-              anchorSize={containerSize.width < 640 ? 18 : 14}
+              anchorSize={containerSize.width < 640 ? 26 : 14}
               anchorCornerRadius={4}
               boundBoxFunc={(oldBox, newBox) => {
                 if (newBox.width < 15 || newBox.height < 15) {

@@ -11,6 +11,7 @@ export interface LogoPlacement {
   shadow_offset_x: number;
   shadow_offset_y: number;
   lock_aspect_ratio: boolean;
+  show_logo?: boolean; // false = no logo stamped on this photo (undefined = legacy, treated as true)
 }
 
 export interface MaskRegion {

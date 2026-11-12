@@ -4,7 +4,8 @@
 
 @layer base {
   html, body, #root {
-    overscroll-behavior-x: none;
+    overscroll-behavior: none;
+    height: 100dvh;
   }
   body {
     background-color: #121212;
