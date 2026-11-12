@@ -25,16 +25,20 @@ import {
   Undo2,
   Redo2,
   Paintbrush,
-  Square
+  Square,
+  SlidersHorizontal,
+  Eye
 } from 'lucide-react';
 import { Project, ImageItem, LogoItem, LogoPlacement, MaskRegion } from '../../types';
 import { StudioCanvas } from '../editor/StudioCanvas';
 import { CompareModal } from '../processing/CompareModal';
+import { PreviewSaveModal } from '../processing/PreviewSaveModal';
 import { api } from '../../services/api';
 
 const LS_PROJECT_KEY = 'savecus_active_project_id';
 const LS_IMAGE_KEY = 'savecus_selected_image_id';
 const LS_PLACEMENTS_KEY = 'savecus_placements';
+const LS_LOGO_ON_KEY = 'savecus_logo_enabled';
 
 const DEFAULT_PLACEMENT: LogoPlacement = {
   x: 0.50,
@@ -51,6 +55,17 @@ const DEFAULT_PLACEMENT: LogoPlacement = {
   lock_aspect_ratio: true,
 };
 
+const LOGO_PRESETS: { key: string; src: string; name: string; sub: string; subClass: string; lightBg?: boolean }[] = [
+  { key: 'junnu_mukka', src: '/junnu_mukka_logo.png', name: 'Junnu Mukka', sub: 'Sarees ★', subClass: 'text-savecus-400' },
+  { key: 'black', src: '/savecus_logo.png', name: 'VSC Black', sub: 'No background', subClass: 'text-slate-400' },
+  { key: 'gold', src: '/savecus_logo_gold.png', name: 'VSC Gold', sub: 'No background', subClass: 'text-amber-400' },
+  { key: 'red', src: '/red_savecus_logo.png', name: 'VSC Red', sub: 'No background', subClass: 'text-rose-400' },
+  { key: 'blue', src: '/blue_savecus_logo.png', name: 'VSC Royal Blue', sub: 'No background', subClass: 'text-blue-400' },
+  { key: 'orange', src: '/orange_savecus_logo.png', name: 'VSC Orange', sub: 'No background', subClass: 'text-orange-400' },
+  { key: 'white_bg', src: '/white_bg_savecus_logo.png', name: 'VSC on White', sub: 'Covers what is behind', subClass: 'text-emerald-400', lightBg: true },
+  { key: 'red_bg', src: '/red_bg_savecus_logo.png', name: 'VSC Red on White', sub: 'Covers what is behind', subClass: 'text-emerald-400', lightBg: true },
+];
+
 const BRUSH_PRESETS = [
   { label: '15px Fine', size: 15 },
   { label: '30px Normal ★', size: 30 },
@@ -64,7 +79,7 @@ export const SimpleStudio: React.FC = () => {
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
 
   // Active tool on photo: 'move-logo' or 'mark-remove'
-  const [activeCanvasTool, setActiveCanvasTool] = useState<'move-logo' | 'mark-remove'>('move-logo');
+  const [activeCanvasTool, setActiveCanvasTool] = useState<'view' | 'move-logo' | 'mark-remove'>('view');
 
   // Mobile active tab when controls are stacked: 'placement' | 'watermark'
   const [mobileTab, setMobileTab] = useState<'placement' | 'watermark'>('placement');
@@ -101,13 +116,22 @@ export const SimpleStudio: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Logo selection and custom logo state
-  const [activeLogoChoice, setActiveLogoChoice] = useState<'junnu_mukka' | 'gold' | 'black' | 'custom'>('junnu_mukka');
+  const [activeLogoChoice, setActiveLogoChoice] = useState<string>('junnu_mukka');
   const [customLogoItem, setCustomLogoItem] = useState<LogoItem | null>(null);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [logoSuccessMsg, setLogoSuccessMsg] = useState<string | null>(null);
   const [isUpdatingSingle, setIsUpdatingSingle] = useState(false);
   const [singleUpdateSuccess, setSingleUpdateSuccess] = useState<string | null>(null);
   const [isRotating, setIsRotating] = useState(false);
+
+  // Mobile: options drawer + preview/save screen + unsaved-change tracking
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  // Logo is OFF until the user picks one (so nothing covers the photo by default)
+  const [logoEnabled, setLogoEnabled] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const lastTapRef = useRef<{ id: string; t: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logoUploadInputRef = useRef<HTMLInputElement>(null);
@@ -130,6 +154,11 @@ export const SimpleStudio: React.FC = () => {
 
           const detailed = await api.getProject(targetProject.id);
           setProject(detailed);
+          try {
+            const saved = localStorage.getItem(`${LS_LOGO_ON_KEY}_${detailed.id}`);
+            if (saved !== null) setLogoEnabled(saved === '1');
+            else setLogoEnabled((detailed.images || []).some((i) => i.status === 'completed'));
+          } catch {}
           try {
             localStorage.setItem(LS_PROJECT_KEY, detailed.id);
           } catch {}
@@ -166,12 +195,13 @@ export const SimpleStudio: React.FC = () => {
           if (detailed.logo) {
             const orig = (detailed.logo.original_filename || '').toLowerCase();
             const url = (detailed.logo.url || '').toLowerCase();
+            const found = [...LOGO_PRESETS]
+              .sort((x, y) => y.key.length - x.key.length)
+              .find((p) => p.key !== 'junnu_mukka' && url.includes(`savecus_${p.key}_`));
             if (orig.includes('junnu') || url.includes('junnu')) {
               setActiveLogoChoice('junnu_mukka');
-            } else if (orig.includes('gold') || url.includes('gold')) {
-              setActiveLogoChoice('gold');
-            } else if (orig.includes('black') || url.includes('black')) {
-              setActiveLogoChoice('black');
+            } else if (found) {
+              setActiveLogoChoice(found.key);
             } else {
               setActiveLogoChoice('custom');
               setCustomLogoItem(detailed.logo);
@@ -215,6 +245,22 @@ export const SimpleStudio: React.FC = () => {
   const canRedo = Boolean(currentHistory.future && currentHistory.future.length > 0);
 
   // Select an image and persist to localStorage
+  useEffect(() => {
+    if (!project) return;
+    try {
+      localStorage.setItem(`${LS_LOGO_ON_KEY}_${project.id}`, logoEnabled ? '1' : '0');
+    } catch {}
+  }, [logoEnabled, project?.id]);
+
+  // Attach the logo on/off choice to a placement before saving it to the server
+  const withLogoFlag = (pl: LogoPlacement): LogoPlacement => ({ ...pl, show_logo: logoEnabled });
+
+  const handleNoLogo = () => {
+    setLogoEnabled(false);
+    setDirty(true);
+    setActiveCanvasTool((t) => (t === 'move-logo' ? 'view' : t));
+  };
+
   const handleSelectImage = (imgId: string) => {
     setSelectedImageId(imgId);
     try {
@@ -225,6 +271,7 @@ export const SimpleStudio: React.FC = () => {
   // Update placement for current photo only (persisted in state & localStorage)
   const handleChangePlacement = (newPlacement: LogoPlacement) => {
     if (!currentImage || !project) return;
+    setDirty(true);
     setPhotoPlacements((prev) => {
       const updated = {
         ...prev,
@@ -279,6 +326,7 @@ export const SimpleStudio: React.FC = () => {
     if (!project || !currentImage || isRotating) return;
     try {
       setIsRotating(true);
+      setDirty(true);
       setErrorMessage(null);
       const rotated = await api.rotateImage(project.id, currentImage.id, 90);
       const cacheBusted: ImageItem = {
@@ -354,6 +402,7 @@ export const SimpleStudio: React.FC = () => {
         setPhotoMasks(newMasks);
       }
       setIsCompleted(false);
+      setDirty(true);
     } catch (err: any) {
       setErrorMessage(err.message || 'Upload failed');
     } finally {
@@ -378,6 +427,8 @@ export const SimpleStudio: React.FC = () => {
       setPhotoPlacements({});
       setPhotoMasks({});
       setPhotoHistory({});
+      setLogoEnabled(false);
+      setActiveCanvasTool('view');
       setIsCompleted(false);
       setErrorMessage(null);
     } finally {
@@ -386,11 +437,14 @@ export const SimpleStudio: React.FC = () => {
   };
 
   // Switch Preset Logo (Junnu Mukka Sarees, Savecus Gold, Savecus Black)
-  const handleSelectLogoPreset = async (variant: 'junnu_mukka' | 'gold' | 'black') => {
+  const handleSelectLogoPreset = async (variant: string) => {
     if (!project) return;
     try {
       setErrorMessage(null);
       setActiveLogoChoice(variant);
+      setLogoEnabled(true);
+      setActiveCanvasTool('move-logo');
+      setDirty(true);
       const updatedLogo = await api.switchLogoVariant(project.id, variant);
       const cacheBusted: LogoItem = {
         ...updatedLogo,
@@ -406,6 +460,9 @@ export const SimpleStudio: React.FC = () => {
   const handleSelectCustomLogo = () => {
     if (customLogoItem && project) {
       setActiveLogoChoice('custom');
+      setLogoEnabled(true);
+      setActiveCanvasTool('move-logo');
+      setDirty(true);
       setProject({ ...project, logo: customLogoItem });
     }
   };
@@ -423,6 +480,9 @@ export const SimpleStudio: React.FC = () => {
         url: `${uploaded.url.split('?')[0]}?t=${Date.now()}`,
       };
       setCustomLogoItem(cacheBusted);
+      setLogoEnabled(true);
+      setActiveCanvasTool('move-logo');
+      setDirty(true);
       setProject((prev) => (prev ? { ...prev, logo: cacheBusted } : prev));
       setActiveLogoChoice('custom');
       setLogoSuccessMsg(`✓ Logo "${file.name}" uploaded with transparent background!`);
@@ -441,6 +501,7 @@ export const SimpleStudio: React.FC = () => {
     const placementToCopy = photoPlacements[currentImage.id] || currentPlacement;
     try {
       setIsApplyingToAll(true);
+      setDirty(true);
       setErrorMessage(null);
 
       // 1. Update local state for all photos
@@ -451,12 +512,12 @@ export const SimpleStudio: React.FC = () => {
       setPhotoPlacements(updated);
 
       // 2. Persist global_settings to project
-      await api.updateProject(project.id, { global_settings: placementToCopy });
+      await api.updateProject(project.id, { global_settings: withLogoFlag(placementToCopy) });
 
       // 3. Persist custom_settings for all images on backend
       await Promise.all(
         images.map((img) =>
-          api.updateImageConfig(project.id, img.id, { custom_settings: placementToCopy })
+          api.updateImageConfig(project.id, img.id, { custom_settings: withLogoFlag(placementToCopy) })
         )
       );
 
@@ -488,6 +549,7 @@ export const SimpleStudio: React.FC = () => {
     if (!project || !currentImage) return;
     try {
       setIsHealing(true);
+      setDirty(true);
       setErrorMessage(null);
 
       // Record prior step into history
@@ -827,7 +889,7 @@ export const SimpleStudio: React.FC = () => {
 
       // 1. Save config
       await api.updateImageConfig(project.id, currentImage.id, {
-        custom_settings: placementToSave,
+        custom_settings: withLogoFlag(placementToSave),
         mask_data: masksToSave,
       });
 
@@ -864,6 +926,13 @@ export const SimpleStudio: React.FC = () => {
     }
   };
 
+  const handlePreviewSingle = async () => {
+    if (!currentImage) return;
+    await handleUpdateSinglePhoto();
+    setPreviewIndex(currentImageIndex);
+    setPreviewOpen(true);
+  };
+
   // Compass Presets for current photo
   const applyCompass = (pos: 'top-left' | 'top-right' | 'center' | 'bottom-left' | 'bottom-right') => {
     let x = 0.5;
@@ -876,6 +945,7 @@ export const SimpleStudio: React.FC = () => {
     else { x = 0.5; y = 0.48; }
 
     handleChangePlacement({ ...currentPlacement, x, y });
+    setLogoEnabled(true);
     setActiveCanvasTool('move-logo');
   };
 
@@ -898,12 +968,12 @@ export const SimpleStudio: React.FC = () => {
       await Promise.all(
         images.map((img) =>
           api.updateImageConfig(project.id, img.id, {
-            custom_settings: photoPlacements[img.id] || currentPlacement,
+            custom_settings: withLogoFlag(photoPlacements[img.id] || currentPlacement),
             mask_data: photoMasks[img.id] || [],
           })
         )
       );
-      await api.updateProject(project.id, { global_settings: currentPlacement });
+      await api.updateProject(project.id, { global_settings: withLogoFlag(currentPlacement) });
 
       // Start background batch job
       const job = await api.startBatchJob(project.id);
@@ -927,7 +997,7 @@ export const SimpleStudio: React.FC = () => {
             }));
             setProject({ ...detailed, images: cacheBustedImages });
             setIsCompleted(true);
-            handleDownloadZip();
+            setDirty(false);
           }
         } catch {
           clearInterval(poll);
@@ -938,6 +1008,15 @@ export const SimpleStudio: React.FC = () => {
       setIsProcessingBatch(false);
       setErrorMessage(err.message || 'Processing failed');
     }
+  };
+
+  const needsProcessing = !isCompleted || dirty || images.some((i) => !i.processed_url);
+
+  const openPreview = () => {
+    setDrawerOpen(false);
+    setPreviewIndex(null);
+    setPreviewOpen(true);
+    if (needsProcessing && !isProcessingBatch) handleRunBatch();
   };
 
   if (loading) {
@@ -954,7 +1033,7 @@ export const SimpleStudio: React.FC = () => {
   return (
     <div className="h-full flex flex-col bg-charcoal-500 text-white select-none overflow-hidden">
       {/* Responsive Top Header */}
-      <header className="h-16 border-b border-surface-border bg-charcoal-400 px-3 sm:px-6 flex items-center justify-between shrink-0 z-30">
+      <header className="h-14 sm:h-16 border-b border-surface-border bg-charcoal-400 px-3 sm:px-6 flex items-center justify-between shrink-0 z-30">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-savecus-500 flex items-center justify-center shadow-lg shadow-savecus-500/25 p-1.5 shrink-0">
             <img src="/savecus_logo.png" alt="Savecus Logo" className="w-full h-full object-contain" />
@@ -982,15 +1061,13 @@ export const SimpleStudio: React.FC = () => {
             </button>
           )}
 
-          {isCompleted && project && (
+          {images.length > 0 && (
             <button
-              onClick={handleDownloadZip}
-              className="min-h-[44px] flex items-center gap-2 px-3.5 sm:px-4 py-2.5 rounded-xl bg-savecus-500 hover:bg-savecus-400 text-charcoal-950 font-black text-xs sm:text-sm shadow-lg shadow-savecus-500/30 transition-all active:scale-95"
-              title="Save all rebranded photos as ZIP"
+              onClick={openPreview}
+              className="hidden sm:flex min-h-[44px] items-center gap-2 px-4 py-2.5 rounded-xl bg-savecus-500 hover:bg-savecus-400 text-charcoal-950 font-black text-sm shadow-lg shadow-savecus-500/30 transition-all active:scale-95"
             >
-              <FileArchive className="w-4 h-4 stroke-[2.5]" />
-              <span className="hidden sm:inline">Download </span>
-              <span>ZIP</span>
+              <Eye className="w-4 h-4 stroke-[2.5]" />
+              <span>Preview & Save</span>
             </button>
           )}
         </div>
@@ -1097,6 +1174,19 @@ export const SimpleStudio: React.FC = () => {
             <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
               <button
                 type="button"
+                onClick={() => setActiveCanvasTool('view')}
+                className={`flex-1 sm:flex-initial min-h-[50px] flex items-center justify-center gap-2 px-3.5 sm:px-5 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition-all active:scale-95 ${
+                  activeCanvasTool === 'view'
+                    ? 'bg-sky-600 text-white shadow-lg ring-2 ring-sky-500/40 border border-sky-400'
+                    : 'bg-charcoal-300 text-slate-300 hover:text-white border border-surface-border'
+                }`}
+              >
+                <Eye className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+                <span className="truncate">View</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => {
                   setActiveCanvasTool('move-logo');
                   setMobileTab('placement');
@@ -1108,7 +1198,7 @@ export const SimpleStudio: React.FC = () => {
                 }`}
               >
                 <Move className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-                <span className="truncate">1. Position Logo</span>
+                <span className="truncate"><span className="sm:hidden">Logo</span><span className="hidden sm:inline">1. Position Logo</span></span>
               </button>
 
               <button
@@ -1124,7 +1214,7 @@ export const SimpleStudio: React.FC = () => {
                 }`}
               >
                 <Eraser className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-                <span className="truncate">2. Erase Watermark</span>
+                <span className="truncate"><span className="sm:hidden">Erase</span><span className="hidden sm:inline">2. Erase Watermark</span></span>
                 {currentMasks.length > 0 && (
                   <span className="ml-1 px-1.5 py-0.5 rounded-full bg-rose-900/80 border border-rose-400/50 text-rose-200 text-[10px] font-black">
                     {currentMasks.length}
@@ -1170,7 +1260,7 @@ export const SimpleStudio: React.FC = () => {
                   type="button"
                   onClick={handleResetPhoto}
                   disabled={isHealing}
-                  className="min-h-[46px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold text-rose-300 hover:text-white bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 transition-all flex items-center gap-1.5 active:scale-95"
+                  className="hidden sm:flex min-h-[46px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold text-rose-300 hover:text-white bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 transition-all flex items-center gap-1.5 active:scale-95"
                   title="Reset photo to pristine original upload"
                 >
                   <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
@@ -1183,7 +1273,7 @@ export const SimpleStudio: React.FC = () => {
           {/* Responsive Layout: Vertical on mobile/tablet (flex-col), Horizontal on desktop (lg:flex-row) */}
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden w-full max-w-full">
             {/* Center Canvas Area */}
-            <div className="flex flex-col flex-1 min-w-0 min-h-[42vh] sm:min-h-[46vh] lg:min-h-0 bg-charcoal-900 relative overflow-hidden w-full">
+            <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-charcoal-900 relative overflow-hidden w-full">
               {/* 
                 THE CANVAS:
                 100% unobstructed! All 4 corners (top-left, top-right, bottom-left, bottom-right)
@@ -1196,7 +1286,8 @@ export const SimpleStudio: React.FC = () => {
                     logo={project?.logo || null}
                     placement={currentPlacement}
                     onChangePlacement={handleChangePlacement}
-                    editorMode={activeCanvasTool === 'mark-remove' ? 'mask' : 'placement'}
+                    editorMode={activeCanvasTool === 'mark-remove' ? 'mask' : activeCanvasTool === 'move-logo' ? 'placement' : 'view'}
+                    showLogo={logoEnabled && activeCanvasTool === 'move-logo'}
                     activeMaskTool={activeMaskTool}
                     brushSize={brushSize}
                     autoHealOnRelease={autoHealOnRelease}
@@ -1235,7 +1326,19 @@ export const SimpleStudio: React.FC = () => {
                       ) : (
                         <RotateCw className="w-3.5 h-3.5 text-savecus-400" />
                       )}
-                      <span>Rotate 90° ↻</span>
+                      <span className="hidden sm:inline">Rotate 90° ↻</span>
+                    </button>
+
+                    {/* Preview this photo as it will be saved */}
+                    <button
+                      type="button"
+                      disabled={isUpdatingSingle}
+                      onClick={handlePreviewSingle}
+                      className="min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-charcoal-600 border border-surface-border text-xs sm:text-sm font-bold text-slate-200 flex items-center gap-1.5 active:scale-95 transition-all shadow-sm"
+                      title="Apply and preview this photo exactly as it will be saved"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-sky-400" />
+                      <span>Preview</span>
                     </button>
 
                     {/* Update / Save this photo */}
@@ -1251,14 +1354,14 @@ export const SimpleStudio: React.FC = () => {
                       ) : (
                         <Sparkles className="w-3.5 h-3.5 fill-current" />
                       )}
-                      <span>Update Photo #{currentImageIndex + 1}</span>
+                      <span><span className="sm:hidden">Update</span><span className="hidden sm:inline">Update Photo #{currentImageIndex + 1}</span></span>
                     </button>
 
                     {/* Reset this photo */}
                     <button
                       type="button"
                       onClick={handleResetPhoto}
-                      className="min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-rose-900/40 border border-surface-border hover:border-rose-500/50 text-xs font-bold text-slate-300 hover:text-rose-300 flex items-center gap-1 active:scale-95 transition-all"
+                      className="hidden sm:flex min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-rose-900/40 border border-surface-border hover:border-rose-500/50 text-xs font-bold text-slate-300 hover:text-rose-300 flex items-center gap-1 active:scale-95 transition-all"
                       title="Reset only this photo back to original"
                     >
                       <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
@@ -1284,7 +1387,7 @@ export const SimpleStudio: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleDownloadSinglePhoto}
-                      className="min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-charcoal-600 border border-surface-border text-xs font-bold text-slate-200 flex items-center gap-1 active:scale-95 transition-all"
+                      className="hidden sm:flex min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl bg-charcoal-700 hover:bg-charcoal-600 border border-surface-border text-xs font-bold text-slate-200 items-center gap-1 active:scale-95 transition-all"
                       title="Download this single photo directly"
                     >
                       <Download className="w-3.5 h-3.5 text-savecus-400" />
@@ -1310,7 +1413,19 @@ export const SimpleStudio: React.FC = () => {
                     return (
                       <div
                         key={img.id}
-                        onClick={() => handleSelectImage(img.id)}
+                        onClick={() => {
+                          const now = Date.now();
+                          const last = lastTapRef.current;
+                          if (last && last.id === img.id && now - last.t < 400) {
+                            lastTapRef.current = null;
+                            if (window.confirm(`Do you really want to delete Photo #${idx + 1}?`)) {
+                              handleDeleteImage(img.id);
+                            }
+                            return;
+                          }
+                          lastTapRef.current = { id: img.id, t: now };
+                          handleSelectImage(img.id);
+                        }}
                         className={`relative w-20 h-16 sm:w-24 sm:h-18 rounded-xl overflow-hidden shrink-0 border-2 cursor-pointer transition-all ${
                           isSelected
                             ? 'border-savecus-500 scale-105 shadow-xl ring-2 ring-savecus-500/50 z-10'
@@ -1334,21 +1449,6 @@ export const SimpleStudio: React.FC = () => {
                           #{idx + 1}
                         </div>
 
-                        {/* 2. Tactile X Delete Button */}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (window.confirm(`Remove Photo #${idx + 1} from this batch?`)) {
-                              handleDeleteImage(img.id);
-                            }
-                          }}
-                          className="absolute top-1 right-1 w-6 h-6 rounded-full bg-charcoal-950/90 hover:bg-rose-600 text-slate-300 hover:text-white flex items-center justify-center shadow-lg border border-white/20 transition-all z-20 active:scale-90"
-                          title={`Remove Photo #${idx + 1}`}
-                        >
-                          <X className="w-3.5 h-3.5 stroke-[3]" />
-                        </button>
-
                         {/* 3. Orientation Indicator */}
                         <span className="absolute bottom-1 left-1 bg-charcoal-950/80 text-[8px] sm:text-[9px] text-savecus-300 px-1 rounded font-bold">
                           {isVertical ? '↕ 9:16' : '↔ Wide'}
@@ -1365,18 +1465,67 @@ export const SimpleStudio: React.FC = () => {
                   })}
                 </div>
 
+                <span className="hidden sm:block text-[10px] text-slate-400 shrink-0 max-w-[90px] leading-tight">Double-tap a photo to remove it</span>
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="min-h-[48px] flex items-center gap-2 px-3.5 sm:px-4 py-2.5 rounded-xl bg-charcoal-200 hover:bg-charcoal-100 border border-surface-border text-xs sm:text-sm font-bold text-slate-200 shrink-0 active:scale-95"
+                  className="min-h-[48px] min-w-[48px] flex items-center justify-center gap-2 px-3.5 sm:px-4 py-2.5 rounded-xl bg-charcoal-200 hover:bg-charcoal-100 border border-surface-border text-xs sm:text-sm font-bold text-slate-200 shrink-0 active:scale-95"
+                  aria-label="Add photos"
                 >
-                  <Plus className="w-4 h-4 text-savecus-500" />
+                  <Plus className="w-5 h-5 text-savecus-500" />
                   <span className="hidden sm:inline">Add Photos</span>
+                </button>
+              </div>
+
+              {/* Mobile bottom action bar: Tools drawer + Preview & Save */}
+              <div
+                className="sm:hidden bg-charcoal-400 border-t border-surface-border px-3 pt-2 flex gap-2 shrink-0"
+                style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen(true)}
+                  className="flex-1 min-h-[52px] rounded-2xl bg-charcoal-200 border border-surface-border text-white font-black text-sm flex items-center justify-center gap-2 active:scale-95"
+                >
+                  <SlidersHorizontal className="w-5 h-5 text-savecus-400" />
+                  Options
+                </button>
+                <button
+                  type="button"
+                  onClick={openPreview}
+                  className="flex-[1.4] min-h-[52px] rounded-2xl bg-savecus-500 text-charcoal-950 font-black text-sm flex items-center justify-center gap-2 active:scale-95 shadow-lg shadow-savecus-500/30"
+                >
+                  <Eye className="w-5 h-5" />
+                  Preview & Save
                 </button>
               </div>
             </div>
 
             {/* Right Side / Mobile Bottom Control Panel */}
-            <div className="w-full lg:w-96 min-w-0 border-t lg:border-t-0 lg:border-l border-surface-border bg-charcoal-300 p-3 sm:p-5 flex flex-col overflow-y-auto shrink-0 space-y-4 max-h-[50vh] lg:max-h-none relative">
+            {/* Backdrop (mobile/tablet drawer) */}
+            {drawerOpen && (
+              <div
+                className="lg:hidden fixed inset-0 z-40 bg-black/60"
+                onClick={() => setDrawerOpen(false)}
+              />
+            )}
+            <div
+              className={`fixed inset-y-0 right-0 z-50 w-[88%] max-w-sm lg:static lg:z-auto lg:w-96 lg:max-w-none min-w-0 border-l border-surface-border bg-charcoal-300 p-3 sm:p-5 flex flex-col overflow-y-auto overscroll-contain shrink-0 space-y-4 transition-transform duration-200 ${
+                drawerOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
+              }`}
+              style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+            >
+              {/* Drawer header (mobile/tablet only) */}
+              <div className="lg:hidden flex items-center justify-between shrink-0">
+                <span className="font-black text-base">Options</span>
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen(false)}
+                  className="w-11 h-11 rounded-xl bg-charcoal-200 border border-surface-border flex items-center justify-center active:scale-95"
+                  aria-label="Close options"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
               {/* Mobile Tab Pill Switcher (Visible only on mobile screen) */}
               <div className="lg:hidden flex items-center gap-2 p-1 bg-charcoal-400 rounded-xl border border-surface-border shrink-0">
                 <button
@@ -1429,91 +1578,49 @@ export const SimpleStudio: React.FC = () => {
                     </span>
                   </div>
 
-                  {/* 3 Preset Logo Cards - Large 50px+ Touch Targets */}
-                  <div className="grid grid-cols-3 gap-2">
-                    {/* Card 1: Junnu Mukka Sarees (Magenta & Gold) */}
+                  {/* Logo presets (tap to choose) */}
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => handleSelectLogoPreset('junnu_mukka')}
-                      className={`relative p-2.5 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition-all text-center border-2 min-h-[96px] active:scale-95 ${
-                        activeLogoChoice === 'junnu_mukka'
-                          ? 'bg-savecus-500/20 border-savecus-500 shadow-xl ring-2 ring-savecus-500/40'
-                          : 'bg-charcoal-100 border-surface-border hover:border-slate-400 hover:bg-charcoal-50'
+                      onClick={handleNoLogo}
+                      className={`col-span-2 min-h-[56px] rounded-2xl border-2 font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition-all ${
+                        !logoEnabled
+                          ? 'bg-savecus-500/20 border-savecus-500 ring-2 ring-savecus-500/40 text-white'
+                          : 'bg-charcoal-100 border-surface-border text-slate-300'
                       }`}
                     >
-                      <div className="w-full h-11 flex items-center justify-center p-1 bg-charcoal-900/80 rounded-xl overflow-hidden">
-                        <img
-                          src="/junnu_mukka_logo.png"
-                          alt="Junnu Mukka Sarees"
-                          className="max-h-full max-w-full object-contain"
-                        />
-                      </div>
-                      <div className="leading-tight">
-                        <div className="text-xs sm:text-sm font-black text-white">Junnu Mukka</div>
-                        <div className="text-[10px] sm:text-xs text-savecus-400 font-bold truncate">Sarees ★</div>
-                      </div>
-                      {activeLogoChoice === 'junnu_mukka' && (
-                        <div className="absolute top-1.5 right-1.5 bg-savecus-500 text-charcoal-950 rounded-full p-0.5 shadow-md">
-                          <Check className="w-3.5 h-3.5 stroke-[3.5]" />
-                        </div>
-                      )}
+                      <X className="w-4 h-4" />
+                      No Logo (just the photo)
+                      {!logoEnabled && <Check className="w-4 h-4 text-savecus-400" />}
                     </button>
-
-                    {/* Card 2: Savecus Gold */}
-                    <button
-                      type="button"
-                      onClick={() => handleSelectLogoPreset('gold')}
-                      className={`relative p-2.5 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition-all text-center border-2 min-h-[96px] active:scale-95 ${
-                        activeLogoChoice === 'gold'
-                          ? 'bg-savecus-500/20 border-savecus-500 shadow-xl ring-2 ring-savecus-500/40'
-                          : 'bg-charcoal-100 border-surface-border hover:border-slate-400 hover:bg-charcoal-50'
-                      }`}
-                    >
-                      <div className="w-full h-11 flex items-center justify-center p-1 bg-charcoal-900/80 rounded-xl overflow-hidden">
-                        <img
-                          src="/savecus_logo_gold.png"
-                          alt="Savecus Gold"
-                          className="max-h-full max-w-full object-contain"
-                        />
-                      </div>
-                      <div className="leading-tight">
-                        <div className="text-xs sm:text-sm font-black text-white">Savecus</div>
-                        <div className="text-[10px] sm:text-xs text-amber-400 font-bold">Gold</div>
-                      </div>
-                      {activeLogoChoice === 'gold' && (
-                        <div className="absolute top-1.5 right-1.5 bg-savecus-500 text-charcoal-950 rounded-full p-0.5 shadow-md">
-                          <Check className="w-3.5 h-3.5 stroke-[3.5]" />
-                        </div>
-                      )}
-                    </button>
-
-                    {/* Card 3: Savecus Black */}
-                    <button
-                      type="button"
-                      onClick={() => handleSelectLogoPreset('black')}
-                      className={`relative p-2.5 rounded-2xl flex flex-col items-center justify-center gap-1.5 transition-all text-center border-2 min-h-[96px] active:scale-95 ${
-                        activeLogoChoice === 'black'
-                          ? 'bg-savecus-500/20 border-savecus-500 shadow-xl ring-2 ring-savecus-500/40'
-                          : 'bg-charcoal-100 border-surface-border hover:border-slate-400 hover:bg-charcoal-50'
-                      }`}
-                    >
-                      <div className="w-full h-11 flex items-center justify-center p-1 bg-charcoal-900/80 rounded-xl overflow-hidden">
-                        <img
-                          src="/savecus_logo.png"
-                          alt="Savecus Black"
-                          className="max-h-full max-w-full object-contain"
-                        />
-                      </div>
-                      <div className="leading-tight">
-                        <div className="text-xs sm:text-sm font-black text-white">Savecus</div>
-                        <div className="text-[10px] sm:text-xs text-slate-400 font-bold">Classic</div>
-                      </div>
-                      {activeLogoChoice === 'black' && (
-                        <div className="absolute top-1.5 right-1.5 bg-savecus-500 text-charcoal-950 rounded-full p-0.5 shadow-md">
-                          <Check className="w-3.5 h-3.5 stroke-[3.5]" />
-                        </div>
-                      )}
-                    </button>
+                    {LOGO_PRESETS.map((p) => {
+                      const active = logoEnabled && activeLogoChoice === p.key;
+                      return (
+                        <button
+                          key={p.key}
+                          type="button"
+                          onClick={() => handleSelectLogoPreset(p.key)}
+                          className={`relative p-2 rounded-2xl flex flex-col items-center justify-center gap-1.5 text-center border-2 min-h-[96px] active:scale-95 transition-all ${
+                            active
+                              ? 'bg-savecus-500/20 border-savecus-500 shadow-xl ring-2 ring-savecus-500/40'
+                              : 'bg-charcoal-100 border-surface-border hover:border-slate-400'
+                          }`}
+                        >
+                          <div className={`w-full h-12 flex items-center justify-center p-1 rounded-xl overflow-hidden ${p.lightBg ? 'bg-slate-500' : 'bg-charcoal-900/80'}`}>
+                            <img src={p.src} alt={p.name} className="max-h-full max-w-full object-contain" />
+                          </div>
+                          <div className="leading-tight">
+                            <div className="text-xs font-black text-white">{p.name}</div>
+                            <div className={`text-[10px] font-bold ${p.subClass}`}>{p.sub}</div>
+                          </div>
+                          {active && (
+                            <div className="absolute top-1.5 right-1.5 bg-savecus-500 text-charcoal-950 rounded-full p-0.5 shadow-md">
+                              <Check className="w-3.5 h-3.5 stroke-[3.5]" />
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {/* Uploaded Custom Logo Card (if any exists) */}
@@ -1522,7 +1629,7 @@ export const SimpleStudio: React.FC = () => {
                       type="button"
                       onClick={handleSelectCustomLogo}
                       className={`w-full min-h-[64px] p-3 rounded-2xl flex items-center justify-between gap-3 cursor-pointer border-2 transition-all active:scale-98 ${
-                        activeLogoChoice === 'custom'
+                        logoEnabled && activeLogoChoice === 'custom'
                           ? 'bg-savecus-500/20 border-savecus-500 shadow-xl ring-2 ring-savecus-500/40'
                           : 'bg-charcoal-100 border-surface-border hover:border-slate-400'
                       }`}
@@ -1544,7 +1651,7 @@ export const SimpleStudio: React.FC = () => {
                           </p>
                         </div>
                       </div>
-                      {activeLogoChoice === 'custom' ? (
+                      {logoEnabled && activeLogoChoice === 'custom' ? (
                         <span className="text-xs font-black px-2.5 py-1 rounded-full bg-savecus-500 text-charcoal-950 shrink-0 shadow">
                           ACTIVE
                         </span>
@@ -1986,74 +2093,66 @@ export const SimpleStudio: React.FC = () => {
                 </div>
               </div>
 
-              {/* 3. The Big Single Rebrand & Download Action - Sticky for Instant Access */}
+              {/* Preview & Save everything */}
               <div className="sticky bottom-0 bg-charcoal-300/95 backdrop-blur-md pt-3 pb-3 -mx-3 sm:-mx-5 px-3 sm:px-5 border-t border-surface-border shadow-2xl z-20 space-y-2.5 mt-auto">
-                {isProcessingBatch ? (
-                  <div className="space-y-2 bg-charcoal-200 p-3.5 rounded-2xl border border-savecus-500/30">
-                    <div className="flex justify-between text-xs sm:text-sm text-savecus-400 font-black">
-                      <span>Rebranding photos in batch ({batchProgress.current}/{batchProgress.total})...</span>
-                      <span>{batchProgress.pct}%</span>
-                    </div>
-                    <div className="w-full h-3 bg-charcoal-900 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-savecus-500 rounded-full transition-all duration-300"
-                        style={{ width: `${batchProgress.pct}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : isCompleted ? (
-                  <div className="space-y-2.5">
-                    <div className="p-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs sm:text-sm font-black flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>All {images.length} photos rebranded successfully!</span>
-                    </div>
-
-                    {/* Massive Save to Computer Button */}
-                    <button
-                      onClick={handleDownloadZip}
-                      className="w-full min-h-[56px] py-3.5 sm:py-4 px-4 rounded-2xl bg-savecus-500 hover:bg-savecus-400 text-charcoal-950 font-black text-sm sm:text-base shadow-2xl shadow-savecus-500/40 transition-all flex items-center justify-center gap-2.5 transform active:scale-95"
-                    >
-                      <HardDrive className="w-5 h-5 stroke-[2.5]" />
-                      <span>SAVE ALL TO COMPUTER (ZIP)</span>
-                    </button>
-                    <p className="text-[11px] text-slate-400 text-center">
-                      Downloads directly to your device Downloads folder.
-                    </p>
-
-                    {/* Re-process / Re-run Batch with Updates */}
-                    <button
-                      onClick={handleRunBatch}
-                      disabled={isProcessingBatch}
-                      className="w-full min-h-[46px] py-2.5 px-3 rounded-xl bg-charcoal-200 hover:bg-charcoal-100 border border-surface-border text-xs sm:text-sm font-bold text-savecus-300 hover:text-white flex items-center justify-center gap-2 active:scale-98"
-                    >
-                      <Play className="w-4 h-4 fill-current text-savecus-500" />
-                      <span>⚡ Re-process All {images.length} Photos</span>
-                    </button>
-
-                    {currentImage && (
-                      <button
-                        onClick={() => setCompareModalImage(currentImage)}
-                        className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-charcoal-200 hover:bg-charcoal-100 border border-surface-border text-xs sm:text-sm font-bold text-slate-200 flex items-center justify-center gap-2"
-                      >
-                        <SplitSquareVertical className="w-4 h-4 text-savecus-500" />
-                        <span>Compare Before & After</span>
-                      </button>
-                    )}
-                  </div>
-                ) : (
+                <button
+                  onClick={openPreview}
+                  disabled={isProcessingBatch || images.length === 0}
+                  className="w-full min-h-[56px] py-3.5 px-4 rounded-2xl bg-gradient-to-r from-savecus-500 to-amber-400 text-charcoal-950 font-black text-sm sm:text-base shadow-2xl shadow-savecus-500/40 transition-all flex items-center justify-center gap-2.5 active:scale-95 disabled:opacity-40"
+                >
+                  <Eye className="w-5 h-5" />
+                  <span>{isProcessingBatch ? `Applying… ${batchProgress.pct}%` : `Preview & Save All ${images.length} Photos`}</span>
+                </button>
+                <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={handleRunBatch}
-                    disabled={isProcessingBatch || images.length === 0}
-                    className="w-full min-h-[56px] sm:min-h-[60px] py-3.5 sm:py-4 px-4 rounded-2xl bg-gradient-to-r from-savecus-500 to-amber-400 hover:from-savecus-400 hover:to-amber-300 text-charcoal-950 font-black text-sm sm:text-base shadow-2xl shadow-savecus-500/40 transition-all flex items-center justify-center gap-2.5 transform active:scale-95 disabled:opacity-40"
+                    onClick={handleResetPhoto}
+                    disabled={isHealing}
+                    className="min-h-[46px] rounded-xl bg-charcoal-200 border border-surface-border text-xs font-bold text-rose-300 flex items-center justify-center gap-1.5 active:scale-95"
                   >
-                    <Play className="w-5 h-5 fill-current" />
-                    <span>Rebrand All {images.length} Photos ✨</span>
+                    <RotateCcw className="w-4 h-4" /> Reset this photo
+                  </button>
+                  <button
+                    onClick={handleDownloadSinglePhoto}
+                    className="min-h-[46px] rounded-xl bg-charcoal-200 border border-surface-border text-xs font-bold text-slate-200 flex items-center justify-center gap-1.5 active:scale-95"
+                  >
+                    <Download className="w-4 h-4 text-savecus-400" /> Save this photo
+                  </button>
+                </div>
+                {isCompleted && currentImage && (
+                  <button
+                    onClick={() => setCompareModalImage(currentImage)}
+                    className="w-full min-h-[44px] rounded-xl bg-charcoal-200 border border-surface-border text-xs font-bold text-slate-200 flex items-center justify-center gap-2"
+                  >
+                    <SplitSquareVertical className="w-4 h-4 text-savecus-500" />
+                    Compare Before & After
                   </button>
                 )}
               </div>
             </div>
           </div>
         </div>
+      )}
+
+      {previewOpen && project && (
+        <PreviewSaveModal
+          images={images}
+          projectId={project.id}
+          projectName={project.name || 'photos'}
+          isProcessing={isProcessingBatch}
+          progress={batchProgress}
+          needsProcessing={previewIndex !== null ? false : needsProcessing}
+          startIndex={previewIndex}
+          onEdit={(idx) => {
+            const img = images[idx];
+            setPreviewOpen(false);
+            if (img) handleSelectImage(img.id);
+          }}
+          onReprocess={handleRunBatch}
+          onClose={() => {
+            setPreviewOpen(false);
+            setPreviewIndex(null);
+          }}
+        />
       )}
 
       {/* Before / After Comparison Modal */}
