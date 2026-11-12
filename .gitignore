@@ -45,5 +45,10 @@ backend/data/logos/*_*.*
 !backend/data/logos/junnu_mukka_logo.png
 !backend/data/logos/default_savecus_logo.png
 !backend/data/logos/gold_savecus_logo.png
+!backend/data/logos/red_savecus_logo.png
+!backend/data/logos/blue_savecus_logo.png
+!backend/data/logos/orange_savecus_logo.png
+!backend/data/logos/white_bg_savecus_logo.png
+!backend/data/logos/red_bg_savecus_logo.png
 !backend/data/logos/.gitkeep
 

@@ -279,6 +279,18 @@ def update_project(project_id: str, data: ProjectUpdate):
             updated_at=now,
         )
 
+# VSC (Vinay Sarees Centre) logo presets: key -> (asset file, display label)
+LOGO_VARIANTS = {
+    "black": ("default_savecus_logo.png", "Black"),
+    "gold": ("gold_savecus_logo.png", "Gold"),
+    "red": ("red_savecus_logo.png", "Red"),
+    "blue": ("blue_savecus_logo.png", "Royal_Blue"),
+    "orange": ("orange_savecus_logo.png", "Orange"),
+    "white_bg": ("white_bg_savecus_logo.png", "Black_On_White"),
+    "red_bg": ("red_bg_savecus_logo.png", "Red_On_White"),
+}
+
+
 @router.post("/{project_id}/logo-variant", response_model=LogoItem)
 def switch_logo_variant(project_id: str, variant: str = "black"):
     with get_db() as conn:
@@ -288,18 +300,27 @@ def switch_logo_variant(project_id: str, variant: str = "black"):
             raise HTTPException(status_code=404, detail="Project not found")
             
         variant_lower = (variant or "black").lower()
-        if "junnu" in variant_lower:
+        if "junnu" in variant_lower or "mukka" in variant_lower:
             src_file = "junnu_mukka_transparent.png"
             dest_filename = f"junnu_mukka_{project_id}.png"
             display_name = "Junnu_Mukka_Sarees_Logo.png"
-        elif "gold" in variant_lower:
-            src_file = "gold_savecus_logo.png"
-            dest_filename = f"savecus_gold_{project_id}.png"
-            display_name = "Savecus_Gold_Logo.png"
         else:
-            src_file = "default_savecus_logo.png"
-            dest_filename = f"savecus_black_{project_id}.png"
-            display_name = "Savecus_Black_Logo.png"
+            matched_key = None
+            if variant_lower in LOGO_VARIANTS:
+                matched_key = variant_lower
+            else:
+                for k in LOGO_VARIANTS:
+                    if k in variant_lower:
+                        matched_key = k
+                        break
+            if matched_key:
+                src_file, label = LOGO_VARIANTS[matched_key]
+                dest_filename = f"savecus_{matched_key}_{project_id}.png"
+                display_name = f"Savecus_{label}_Logo.png"
+            else:
+                src_file = "default_savecus_logo.png"
+                dest_filename = f"savecus_black_{project_id}.png"
+                display_name = "Savecus_Black_Logo.png"
 
         src_path = settings.LOGOS_DIR / src_file
         if not src_path.exists():
