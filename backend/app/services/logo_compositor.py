@@ -84,6 +84,17 @@ def composite_logo_on_image(
         base_w, base_h = base_img.size
         logo_orig_w, logo_orig_h = logo_img.size
         
+        if not placement.show_logo:
+            # No logo wanted: just save the (healed) photo as-is
+            fmt = output_format.upper()
+            if fmt in ("JPEG", "JPG"):
+                base_img.convert("RGB").save(output_path, "JPEG", quality=quality, optimize=True)
+            elif fmt == "WEBP":
+                base_img.save(output_path, "WEBP", quality=quality)
+            else:
+                base_img.save(output_path, "PNG", optimize=True)
+            return output_path
+
         # Calculate target logo dimensions based on normalized scale
         target_logo_w = max(4, int(round(placement.scale * base_w)))
         logo_aspect = logo_orig_w / logo_orig_h if logo_orig_h > 0 else 1.0

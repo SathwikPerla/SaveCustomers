@@ -15,6 +15,7 @@ class LogoPlacement(BaseModel):
     shadow_offset_x: float = Field(default=4.0, description="Shadow X offset")
     shadow_offset_y: float = Field(default=4.0, description="Shadow Y offset")
     lock_aspect_ratio: bool = Field(default=True, description="Lock aspect ratio")
+    show_logo: bool = Field(default=True, description="False = do not stamp any logo on this photo")
 
 class MaskRegion(BaseModel):
     id: str
