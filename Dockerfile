@@ -20,9 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source & default brand assets
+# Copy backend source & ONLY the preset brand logos (not per-project generated copies)
 COPY backend/app ./app
-COPY backend/data/logos ./data/logos
+COPY backend/data/logos/junnu_mukka_transparent.png backend/data/logos/*_savecus_logo.png ./data/logos/
+
+# Writable working folders for uploads / processed photos / database
+RUN mkdir -p /app/data/uploads /app/data/processed /app/data/thumbnails /app/data/masks /app/data/exports \
+    && chmod -R 777 /app/data
 
 # Copy built frontend dist from Stage 1
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
@@ -32,6 +36,8 @@ EXPOSE 8000
 
 ENV PORT=8000
 ENV PYTHONPATH=/app
+# Keep memory low on small (512 MB) cloud servers
+ENV MALLOC_ARENA_MAX=2
 
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
 

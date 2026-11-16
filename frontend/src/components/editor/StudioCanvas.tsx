@@ -55,6 +55,120 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
   const [brushPoints, setBrushPoints] = useState<number[]>([]);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
 
+  // ---- Two-finger pinch zoom + pan (phone) ----
+  // The live view lives in a ref and is pushed straight to the Konva stage while the gesture runs,
+  // so there is no re-render lag (that lag made the photo jump around). React state is synced after.
+  const pinchRef = useRef<{ dist: number; cx: number; cy: number } | null>(null);
+  const viewRef = useRef({ scale: 1, x: 0, y: 0 });
+  const [isPinching, setIsPinching] = useState(false);
+  const sizeRef = useRef({ w: 0, h: 0 });
+  sizeRef.current = { w: containerSize.width, h: containerSize.height };
+  if (!pinchRef.current) viewRef.current = { scale: stageScale, x: stagePos.x, y: stagePos.y };
+
+  // Keep the photo from being flung off screen: never smaller than "fit", never panned past its edges
+  const clampView = (scale: number, x: number, y: number) => {
+    const sc = Math.max(1, Math.min(8, scale));
+    const { w, h } = sizeRef.current;
+    if (sc <= 1.001) return { scale: 1, x: 0, y: 0 };
+    return {
+      scale: sc,
+      x: Math.max(w - w * sc, Math.min(0, x)),
+      y: Math.max(h - h * sc, Math.min(0, y)),
+    };
+  };
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const info = (t: TouchList) => {
+      const rect = el.getBoundingClientRect();
+      const a = t[0];
+      const b = t[1];
+      return {
+        dist: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)),
+        cx: (a.clientX + b.clientX) / 2 - rect.left,
+        cy: (a.clientY + b.clientY) / 2 - rect.top,
+      };
+    };
+
+    const applyToStage = (v: { scale: number; x: number; y: number }) => {
+      const st = stageRef.current;
+      if (!st) return;
+      st.scale({ x: v.scale, y: v.scale });
+      st.position({ x: v.x, y: v.y });
+      st.batchDraw();
+    };
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length >= 2) {
+        e.preventDefault();
+        e.stopPropagation();
+        pinchRef.current = info(e.touches);
+        setIsPinching(true);
+        // cancel any one-finger drawing / logo drag that was just starting
+        setIsDrawing(false);
+        setNewMask(null);
+        setBrushPoints([]);
+        logoNodeRef.current?.stopDrag();
+        stageRef.current?.stopDrag();
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!pinchRef.current) return;
+      if (e.touches.length < 2) return;
+      e.preventDefault();
+      e.stopPropagation(); // Konva must not also treat this as a drag
+      const prev = pinchRef.current;
+      const cur = info(e.touches);
+      const v = viewRef.current;
+      const rawScale = v.scale * (cur.dist / prev.dist);
+      // content point that was under the previous midpoint must end up under the new midpoint
+      const px = (prev.cx - v.x) / v.scale;
+      const py = (prev.cy - v.y) / v.scale;
+      const next = clampView(rawScale, cur.cx - px * rawScale, cur.cy - py * rawScale);
+      viewRef.current = next;
+      pinchRef.current = cur;
+      applyToStage(next);
+    };
+    const finish = (e: TouchEvent) => {
+      if (!pinchRef.current) return;
+      if (e.touches.length >= 2) {
+        pinchRef.current = info(e.touches); // a third finger joined/left: re-baseline
+        return;
+      }
+      pinchRef.current = null;
+      const v = viewRef.current;
+      setStageScale(v.scale);
+      setStagePos({ x: v.x, y: v.y });
+      setIsPinching(false);
+    };
+
+    const stopGesture = (e: Event) => e.preventDefault(); // iOS Safari page-zoom gesture
+
+    el.addEventListener('touchstart', onStart, { passive: false, capture: true });
+    el.addEventListener('touchmove', onMove, { passive: false, capture: true });
+    el.addEventListener('touchend', finish, { capture: true });
+    el.addEventListener('touchcancel', finish, { capture: true });
+    el.addEventListener('gesturestart', stopGesture);
+    el.addEventListener('gesturechange', stopGesture);
+    return () => {
+      el.removeEventListener('touchstart', onStart, { capture: true } as any);
+      el.removeEventListener('touchmove', onMove, { capture: true } as any);
+      el.removeEventListener('touchend', finish, { capture: true } as any);
+      el.removeEventListener('touchcancel', finish, { capture: true } as any);
+      el.removeEventListener('gesturestart', stopGesture);
+      el.removeEventListener('gesturechange', stopGesture);
+    };
+  }, []);
+
+  // Whenever the photo is re-healed (new result image), drop any leftover red drawing
+  useEffect(() => {
+    setNewMask(null);
+    setBrushPoints([]);
+    setIsDrawing(false);
+  }, [image.processed_url, image.id]);
+
   // Observe container size responsively
   useEffect(() => {
     if (!containerRef.current) return;
@@ -151,18 +265,16 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
     const scaleBy = 1.08;
     const direction = e.evt.deltaY > 0 ? -1 : 1;
     let newScale = direction > 0 ? oldScale * scaleBy : oldScale / scaleBy;
-    newScale = Math.max(0.3, Math.min(newScale, 5));
+    newScale = Math.max(1, Math.min(newScale, 8));
 
     const mousePointTo = {
       x: (pointer.x - stagePos.x) / oldScale,
       y: (pointer.y - stagePos.y) / oldScale,
     };
 
-    setStageScale(newScale);
-    setStagePos({
-      x: pointer.x - mousePointTo.x * newScale,
-      y: pointer.y - mousePointTo.y * newScale,
-    });
+    const c = clampView(newScale, pointer.x - mousePointTo.x * newScale, pointer.y - mousePointTo.y * newScale);
+    setStageScale(c.scale);
+    setStagePos({ x: c.x, y: c.y });
   };
 
   // Drag & Transform calculations for Logo
@@ -234,6 +346,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
 
   // Mask drawing handlers
   const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    if (pinchRef.current) return;
     if (editorMode !== 'mask' || isPanMode || isSpacePressed || isHealing) return;
     const stage = stageRef.current;
     if (!stage) return;
@@ -264,6 +377,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
       updateCursorPos(pos);
     }
 
+    if (pinchRef.current) return;
     if (!isDrawing || editorMode !== 'mask' || isHealing) return;
     if (!pos) return;
 
@@ -348,7 +462,7 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
     }
   };
 
-  const isDraggableCanvas = isPanMode || isSpacePressed;
+  const isDraggableCanvas = !isPinching && (isPanMode || isSpacePressed || editorMode === 'view');
 
   return (
     <div
@@ -372,7 +486,9 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
         draggable={isDraggableCanvas}
         onDragEnd={(e) => {
           if (e.target === stageRef.current) {
-            setStagePos({ x: e.target.x(), y: e.target.y() });
+            const c = clampView(stageScale, e.target.x(), e.target.y());
+            e.target.position({ x: c.x, y: c.y });
+            setStagePos({ x: c.x, y: c.y });
           }
         }}
         onWheel={handleWheel}
@@ -559,6 +675,17 @@ export const StudioCanvas: React.FC<StudioCanvasProps> = ({
           )}
         </Layer>
       </Stage>
+      )}
+
+      {/* Reset zoom (only shown while zoomed) */}
+      {(Math.abs(stageScale - 1) > 0.02 || stagePos.x !== 0 || stagePos.y !== 0) && (
+        <button
+          type="button"
+          onClick={fitToScreen}
+          className="absolute top-2 right-2 z-30 h-10 px-3 rounded-xl bg-charcoal-900/90 border border-surface-border text-xs font-black text-white active:scale-95"
+        >
+          {Math.round(stageScale * 100)}% · Fit
+        </button>
       )}
 
       {/* Snapseed Healing In-Progress Overlay */}

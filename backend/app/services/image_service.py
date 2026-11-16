@@ -1,3 +1,4 @@
+import os
 import io
 import uuid
 from pathlib import Path
@@ -48,9 +49,23 @@ def validate_and_save_image(content: bytes, original_filename: str) -> tuple[str
             stored_filename = get_unique_filename(original_filename)
             stored_path = settings.UPLOADS_DIR / stored_filename
             
-            # Save original image
-            with open(stored_path, "wb") as f:
-                f.write(content)
+            # Save original image. Very large camera photos are scaled down to MAX_IMAGE_SIDE
+            # (default 3000px longest side) so a 30-photo batch fits safely in a small cloud server.
+            max_side = int(os.getenv("MAX_IMAGE_SIDE", "3000"))
+            if max(width, height) > max_side:
+                scale = max_side / float(max(width, height))
+                width, height = max(1, round(width * scale)), max(1, round(height * scale))
+                img = img.resize((width, height), Image.Resampling.LANCZOS)
+                if ext in (".jpg", ".jpeg"):
+                    img.convert("RGB").save(stored_path, "JPEG", quality=95, subsampling=0)
+                elif ext == ".webp":
+                    img.save(stored_path, "WEBP", quality=95)
+                else:
+                    img.save(stored_path, "PNG", optimize=True)
+                content = stored_path.read_bytes()
+            else:
+                with open(stored_path, "wb") as f:
+                    f.write(content)
                 
             # Create thumbnail
             thumb_filename = f"thumb_{Path(stored_filename).stem}.jpg"

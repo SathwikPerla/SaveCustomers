@@ -288,6 +288,7 @@ LOGO_VARIANTS = {
     "orange": ("orange_savecus_logo.png", "Orange"),
     "white_bg": ("white_bg_savecus_logo.png", "Black_On_White"),
     "red_bg": ("red_bg_savecus_logo.png", "Red_On_White"),
+    "yellow_bg": ("yellow_bg_savecus_logo.png", "Black_On_Yellow"),
 }
 
 

@@ -23,44 +23,51 @@ The app includes **Automated Background Matting & Transparency**:
 
 ---
 
-## ☁️ Part 2: Making It Permanent 24/7 (Laptop Independent)
+## ☁️ Part 2: Permanent 24/7 Link on Render.com (Free)
 
-Currently, the local tunnel runs from your MacBook. When the MacBook sleeps or closes, the tunnel drops.
-To make it permanently online 24/7 so your father can use it anytime anywhere:
+The repo contains a Render **Blueprint** (`render.yaml`), so Render reads every setting from it.
 
-### 🌐 Primary Cloud Deployment: Render.com (100% Free Tier)
+### One-time setup (about 10 minutes)
+1. Go to <https://dashboard.render.com> and **sign in with GitHub**.
+2. Click **New + → Blueprint**, pick **`SathwikPerla/SaveCustomers`**, branch **`main`**.
+3. Render shows the service `savecus-rebrand-studio` (Docker, Free, Singapore). It asks for **`ACCESS_KEY`**: type your private access code (see below) → **Apply**.
+4. Wait for the first build (~5–8 min). The service page shows your permanent URL, e.g.
+   **`https://savecus-rebrand-studio.onrender.com`** (it never changes).
+5. Keep it awake (free plan sleeps after 15 min without visits):
+   go to <https://uptimerobot.com> (free) → **New monitor → HTTP(s)** →
+   URL `https://<your-render-url>/api/health` → interval **5 minutes** → Create.
+   This also emails you if the site is ever down.
 
-Your code is already pushed to GitHub at: `https://github.com/SathwikPerla/SaveCustomers`
+### Settings Render uses (already in `render.yaml`)
+| Setting | Value |
+|---|---|
+| Runtime | Docker (root `Dockerfile`; builds the React app, then runs FastAPI) |
+| Start command | from Dockerfile: `uvicorn app.main:app --host 0.0.0.0 --port ${PORT}` |
+| `PORT` | `8000` |
+| `MAX_IMAGE_SIDE` | `3000` (huge camera photos are scaled to 3000px longest side) |
+| `ACCESS_KEY` | your private code (set in the Render dashboard, never in git) |
+| Health check | `/api/health` |
+| Auto-deploy | every `git push` to `main` redeploys automatically |
 
-Follow these 4 simple steps to deploy on Render's free tier:
+### The private access code
+The cloud link is public on the internet, so the app is locked with `ACCESS_KEY`.
+Give your father this link **once**:
 
-1. **Sign in**: Go to [dashboard.render.com](https://dashboard.render.com/) and sign in with GitHub.
-2. **Create New Web Service**:
-   - Click the blue **"New +"** button in top-right ➔ Select **"Web Service"**.
-   - Under "Connect a repository", search for and select **`SathwikPerla/SaveCustomers`**.
-3. **Configure**:
-   - **Name**: `savecus-studio` (or `junnu-sarees-studio`)
-   - **Region**: Choose the closest region (e.g., Singapore or Oregon)
-   - **Environment**: **Docker** (Render will auto-detect the root `Dockerfile` and `render.yaml`)
-   - **Instance Type**: **Free** ($0 / month)
-4. **Deploy**:
-   - Click **"Create Web Service"**.
-   - Render will build the Vite frontend, set up OpenCV and Python 3.11, and start the app.
-   - Within 3 minutes, you will get a permanent public link like:
-     **`https://savecus-studio.onrender.com`**
-   - That link is online 24/7 with a free SSL certificate! Send it to your father's phone.
+    https://<your-render-url>/?key=<ACCESS_KEY>
 
-*(Note on Render Free Tier: If no one visits for 15 minutes, Render sleeps the container to save energy. When your father opens the link, it automatically wakes up in ~40 seconds).*
+His phone then remembers it (5 years). After that, the plain link (and the home-screen app) just opens.
+Anyone without the code only sees an “Enter access code” page. To change the code: Render → service → **Environment** → edit `ACCESS_KEY` → Save (phones then need the new `?key=` link once).
 
----
+### Storage: is the free (temporary) disk enough?
+Yes, for the daily flow **upload → edit → Preview & Save / ZIP → done**. Photos are stored on the server's
+temporary disk and are **wiped whenever the server restarts or redeploys** (after a `git push`, or occasionally by Render).
+So: **always save/download the finished photos the same session**; don't keep batches on the server for days.
+A persistent disk needs a paid plan (Render Starter ~$7/mo + disk) — not needed for this workflow.
 
-### 🏆 Alternative: Railway.app (Never Sleeps, $5 Monthly Credit)
-
-If you prefer an instance that never goes to sleep:
-1. Go to [railway.app](https://railway.app) and sign up with GitHub.
-2. Click **"+ New Project"** ➔ **"Deploy from GitHub repo"** ➔ Select `SathwikPerla/SaveCustomers`.
-3. Railway automatically detects the included `Dockerfile` and `railway.json`.
-4. Under Settings ➔ Networking, click **"Generate Domain"** for an instant permanent URL like `https://savecustomers.up.railway.app`.
+### Free-plan limits to know
+- 512 MB RAM: tested with 30 WhatsApp photos (peak ~290 MB) and full 12 MP camera photos (peak ~430 MB) — OK.
+- 750 free hours / month: one always-on service uses ≤ 744 h, so it fits.
+- First build after a push takes a few minutes; during that time the old version keeps serving.
 
 ---
 
@@ -110,11 +117,3 @@ The application includes full Progressive Web App (PWA) support (`manifest.json`
 4. The app installs like a regular Android app from Google Play.
 
 ---
-
-## 🧪 Current Live Development Status (Mac Tunnel Active Now)
-
-While you prepare your GitHub push, the live encrypted tunnel is active right now:
-- **Cloudflare Public Link**: `https://reduced-volumes-touched-advocacy.trycloudflare.com`
-- **Local Wi-Fi Network**: `http://192.168.1.102:8080`
-- **Local Mac**: `http://localhost:8080`
-- **All 21 Rebranded Sarees**: Saved in `/Users/sathwikperla/Desktop/Savecus/the batch updated` (also zipped in `the batch updated.zip`).

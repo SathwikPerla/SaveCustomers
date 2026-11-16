@@ -11,3 +11,13 @@ the batch updated
 *.log
 
 
+backend/data/uploads
+backend/data/processed
+backend/data/thumbnails
+backend/data/exports
+backend/data/masks
+backend/data/*.db
+backend/tests
+the main logoi and font
+scripts
+**/__pycache__

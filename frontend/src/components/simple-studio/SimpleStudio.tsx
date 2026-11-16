@@ -39,6 +39,17 @@ const LS_PROJECT_KEY = 'savecus_active_project_id';
 const LS_IMAGE_KEY = 'savecus_selected_image_id';
 const LS_PLACEMENTS_KEY = 'savecus_placements';
 const LS_LOGO_ON_KEY = 'savecus_logo_enabled';
+const LS_HISTORY_KEY = 'savecus_history';
+
+// One undo step = the marked/healed areas AND the logo position at that moment
+interface HistoryStep {
+  processed_url: string | null;
+  masks: MaskRegion[];
+  placement?: LogoPlacement;
+}
+
+const sameMasks = (a: MaskRegion[], b: MaskRegion[]) =>
+  a.length === b.length && a.every((m, i) => m.id === b[i].id);
 
 const DEFAULT_PLACEMENT: LogoPlacement = {
   x: 0.50,
@@ -63,6 +74,7 @@ const LOGO_PRESETS: { key: string; src: string; name: string; sub: string; subCl
   { key: 'blue', src: '/blue_savecus_logo.png', name: 'VSC Royal Blue', sub: 'No background', subClass: 'text-blue-400' },
   { key: 'orange', src: '/orange_savecus_logo.png', name: 'VSC Orange', sub: 'No background', subClass: 'text-orange-400' },
   { key: 'white_bg', src: '/white_bg_savecus_logo.png', name: 'VSC on White', sub: 'Covers what is behind', subClass: 'text-emerald-400', lightBg: true },
+  { key: 'yellow_bg', src: '/yellow_bg_savecus_logo.png', name: 'VSC on Yellow', sub: 'Covers what is behind', subClass: 'text-emerald-400', lightBg: true },
   { key: 'red_bg', src: '/red_bg_savecus_logo.png', name: 'VSC Red on White', sub: 'Covers what is behind', subClass: 'text-emerald-400', lightBg: true },
 ];
 
@@ -96,10 +108,13 @@ export const SimpleStudio: React.FC = () => {
   // Per-photo watermark masks
   const [photoMasks, setPhotoMasks] = useState<Record<string, MaskRegion[]>>({});
 
+  // Marked areas that are NOT erased yet (only these are drawn in red on the photo)
+  const [pendingMasks, setPendingMasks] = useState<Record<string, MaskRegion[]>>({});
+
   // Per-photo undo / redo history stack
-  const [photoHistory, setPhotoHistory] = useState<
-    Record<string, { past: Array<{ processed_url: string | null; masks: MaskRegion[] }>; future: Array<{ processed_url: string | null; masks: MaskRegion[] }> }>
-  >({});
+  const [photoHistory, setPhotoHistory] = useState<Record<string, { past: HistoryStep[]; future: HistoryStep[] }>>({});
+  const lastPlacementPushRef = useRef<{ id: string; t: number } | null>(null);
+  const lastSavedCfgRef = useRef<Record<string, string>>({});
 
   // Apply logo position to all photos state
   const [isApplyingToAll, setIsApplyingToAll] = useState(false);
@@ -188,6 +203,20 @@ export const SimpleStudio: React.FC = () => {
             });
             setPhotoPlacements(initialPlacements);
             setPhotoMasks(initialMasks);
+            try {
+              const rawH = localStorage.getItem(`${LS_HISTORY_KEY}_${detailed.id}`);
+              if (rawH) {
+                const parsed = JSON.parse(rawH) as Record<string, { past: HistoryStep[]; future: HistoryStep[] }>;
+                const keep: typeof parsed = {};
+                detailed.images.forEach((img) => {
+                  if (parsed[img.id]) keep[img.id] = parsed[img.id];
+                });
+                setPhotoHistory(keep);
+              }
+            } catch {}
+            detailed.images.forEach((img) => {
+              lastSavedCfgRef.current[img.id] = JSON.stringify([initialPlacements[img.id], initialMasks[img.id]]);
+            });
             if (detailed.images.some((i) => i.status === 'completed')) {
               setIsCompleted(true);
             }
@@ -241,7 +270,23 @@ export const SimpleStudio: React.FC = () => {
     ? photoHistory[currentImage.id]
     : { past: [], future: [] };
 
-  const canUndo = (currentHistory.past && currentHistory.past.length > 0) || (currentMasks.length > 0 && !autoHealOnRelease);
+  // The editing canvas must show the photo WITHOUT the logo baked in (the logo is drawn live on top),
+  // otherwise a saved photo shows a stuck second logo and you can't move/undo it cleanly.
+  const canvasImage: ImageItem | null = (() => {
+    if (!currentImage) return null;
+    const pu = currentImage.processed_url;
+    if (!pu || !pu.includes('/rebranded_')) return currentImage;
+    const [base, qs] = pu.split('?');
+    const healed = (photoMasks[currentImage.id] || []).length > 0;
+    return {
+      ...currentImage,
+      processed_url: healed ? `${base.replace('/rebranded_', '/inpainted_')}${qs ? '?' + qs : ''}` : null,
+    };
+  })();
+
+  const logoShownOnThisPhoto = logoEnabled && currentPlacement.show_logo !== false;
+
+  const canUndo = (currentHistory.past && currentHistory.past.length > 0) || ((currentImage && (pendingMasks[currentImage.id] || []).length > 0) ?? false);
   const canRedo = Boolean(currentHistory.future && currentHistory.future.length > 0);
 
   // Select an image and persist to localStorage
@@ -253,7 +298,16 @@ export const SimpleStudio: React.FC = () => {
   }, [logoEnabled, project?.id]);
 
   // Attach the logo on/off choice to a placement before saving it to the server
-  const withLogoFlag = (pl: LogoPlacement): LogoPlacement => ({ ...pl, show_logo: logoEnabled });
+  const withLogoFlag = (pl: LogoPlacement): LogoPlacement => ({ ...pl, show_logo: logoEnabled && pl.show_logo !== false });
+
+  const showLogoOnCurrent = () => {
+    if (!currentImage) return;
+    setPhotoPlacements((prev) => {
+      const cur = prev[currentImage.id];
+      if (!cur || cur.show_logo !== false) return prev;
+      return { ...prev, [currentImage.id]: { ...cur, show_logo: true } };
+    });
+  };
 
   const handleNoLogo = () => {
     setLogoEnabled(false);
@@ -272,6 +326,26 @@ export const SimpleStudio: React.FC = () => {
   const handleChangePlacement = (newPlacement: LogoPlacement) => {
     if (!currentImage || !project) return;
     setDirty(true);
+    // Record the previous position so Undo can bring it back (drags / slider moves are merged into one step)
+    {
+      const now = Date.now();
+      const last = lastPlacementPushRef.current;
+      if (!(last && last.id === currentImage.id && now - last.t < 700)) {
+        const step: HistoryStep = {
+          processed_url: currentImage.processed_url || null,
+          masks: photoMasks[currentImage.id] || [],
+          placement: photoPlacements[currentImage.id] || currentPlacement,
+        };
+        setPhotoHistory((prev) => ({
+          ...prev,
+          [currentImage.id]: {
+            past: [...(prev[currentImage.id]?.past || []), step].slice(-60),
+            future: [],
+          },
+        }));
+      }
+      lastPlacementPushRef.current = { id: currentImage.id, t: now };
+    }
     setPhotoPlacements((prev) => {
       const updated = {
         ...prev,
@@ -350,6 +424,24 @@ export const SimpleStudio: React.FC = () => {
       );
 
       // Auto-adapt scale when switching between vertical and horizontal
+      // marked areas / undo steps belong to the old orientation -> start clean for this photo
+      const oldW = currentImage.width;
+      const oldH = currentImage.height;
+      const rotateMask = (m: MaskRegion): MaskRegion => {
+        if (m.type === 'rect' && m.x !== undefined && m.y !== undefined && m.width && m.height) {
+          return { ...m, x: 1 - (m.y + m.height), y: m.x, width: m.height, height: m.width };
+        }
+        if (m.points) {
+          const pts: number[] = [];
+          for (let i = 0; i < m.points.length; i += 2) pts.push(1 - m.points[i + 1], m.points[i]);
+          return { ...m, points: pts, stroke_width: m.stroke_width ? (m.stroke_width * oldW) / oldH : m.stroke_width };
+        }
+        return m;
+      };
+      const rotatedMasks = (photoMasks[currentImage.id] || []).map(rotateMask);
+      setPhotoMasks((prev) => ({ ...prev, [currentImage.id]: rotatedMasks }));
+      setPendingMasks((prev) => ({ ...prev, [currentImage.id]: (prev[currentImage.id] || []).map(rotateMask) }));
+      setPhotoHistory((prev) => ({ ...prev, [currentImage.id]: { past: [], future: [] } }));
       const isNowVertical = rotated.height > rotated.width;
       const cur = photoPlacements[currentImage.id] || currentPlacement;
       const adaptedScale = isNowVertical ? 0.46 : 0.36;
@@ -426,6 +518,7 @@ export const SimpleStudio: React.FC = () => {
       setSelectedImageId(null);
       setPhotoPlacements({});
       setPhotoMasks({});
+      setPendingMasks({});
       setPhotoHistory({});
       setLogoEnabled(false);
       setActiveCanvasTool('view');
@@ -443,6 +536,7 @@ export const SimpleStudio: React.FC = () => {
       setErrorMessage(null);
       setActiveLogoChoice(variant);
       setLogoEnabled(true);
+      showLogoOnCurrent();
       setActiveCanvasTool('move-logo');
       setDirty(true);
       const updatedLogo = await api.switchLogoVariant(project.id, variant);
@@ -461,9 +555,31 @@ export const SimpleStudio: React.FC = () => {
     if (customLogoItem && project) {
       setActiveLogoChoice('custom');
       setLogoEnabled(true);
+      showLogoOnCurrent();
       setActiveCanvasTool('move-logo');
       setDirty(true);
       setProject({ ...project, logo: customLogoItem });
+    }
+  };
+
+  // Remove only the uploaded custom logo (presets are never touched)
+  const handleRemoveCustomLogo = async () => {
+    if (!project || !customLogoItem) return;
+    if (!window.confirm('Remove your uploaded logo?')) return;
+    const wasActive = activeLogoChoice === 'custom';
+    setCustomLogoItem(null);
+    if (!wasActive) return;
+    try {
+      setErrorMessage(null);
+      setLogoEnabled(false);
+      setActiveCanvasTool((t) => (t === 'move-logo' ? 'view' : t));
+      setDirty(true);
+      await api.deleteLogo(project.id).catch(() => {});
+      const restored = await api.switchLogoVariant(project.id, 'junnu_mukka');
+      setActiveLogoChoice('junnu_mukka');
+      setProject((prev) => (prev ? { ...prev, logo: { ...restored, url: `${restored.url.split('?')[0]}?t=${Date.now()}` } } : prev));
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Could not remove logo');
     }
   };
 
@@ -498,7 +614,7 @@ export const SimpleStudio: React.FC = () => {
   // Apply current photo's logo position & size across all photos in the batch
   const handleApplyPlacementToAll = async () => {
     if (!project || images.length === 0 || !currentImage) return;
-    const placementToCopy = photoPlacements[currentImage.id] || currentPlacement;
+    const placementToCopy: LogoPlacement = { ...(photoPlacements[currentImage.id] || currentPlacement), show_logo: true };
     try {
       setIsApplyingToAll(true);
       setDirty(true);
@@ -553,14 +669,15 @@ export const SimpleStudio: React.FC = () => {
       setErrorMessage(null);
 
       // Record prior step into history
-      const prevStep = {
+      const prevStep: HistoryStep = {
         processed_url: currentImage.processed_url || null,
         masks: photoMasks[currentImage.id] || [],
+        placement: photoPlacements[currentImage.id] || currentPlacement,
       };
       setPhotoHistory((prev) => ({
         ...prev,
         [currentImage.id]: {
-          past: [...(prev[currentImage.id]?.past || []), prevStep],
+          past: [...(prev[currentImage.id]?.past || []), prevStep].slice(-60),
           future: [],
         },
       }));
@@ -594,6 +711,7 @@ export const SimpleStudio: React.FC = () => {
         ...prev,
         [currentImage.id]: masksToInpaint,
       }));
+      setPendingMasks((prev) => ({ ...prev, [currentImage.id]: [] }));
 
       setInpaintSuccessMsg(true);
       setTimeout(() => setInpaintSuccessMsg(false), 3500);
@@ -619,6 +737,10 @@ export const SimpleStudio: React.FC = () => {
       ...prev,
       [currentImage.id]: [...(prev[currentImage.id] || []), region],
     }));
+    setPendingMasks((prev) => ({
+      ...prev,
+      [currentImage.id]: [...(prev[currentImage.id] || []), region],
+    }));
   };
 
   // Manually trigger inpaint on active photo
@@ -632,6 +754,7 @@ export const SimpleStudio: React.FC = () => {
   // Clear drawn masks on current photo
   const handleClearCurrentMasks = () => {
     if (!currentImage) return;
+    setPendingMasks((prev) => ({ ...prev, [currentImage.id]: [] }));
     setPhotoMasks((prev) => ({
       ...prev,
       [currentImage.id]: [],
@@ -654,6 +777,10 @@ export const SimpleStudio: React.FC = () => {
             ...prev,
             [currentImage.id]: [...(prev[currentImage.id] || []), ...res.regions],
           }));
+          setPendingMasks((prev) => ({
+            ...prev,
+            [currentImage.id]: [...(prev[currentImage.id] || []), ...res.regions],
+          }));
         }
         setActiveCanvasTool('mark-remove');
         setMobileTab('watermark');
@@ -667,81 +794,77 @@ export const SimpleStudio: React.FC = () => {
     }
   };
 
-  // Instant Undo: reverts last heal or uncommitted stroke
+  // Bring the photo to a given step: logo position + (if the healed areas differ) re-run / clear the healing
+  const restoreStep = async (step: HistoryStep) => {
+    if (!project || !currentImage) return;
+    const id = currentImage.id;
+    if (step.placement) {
+      const pl = step.placement;
+      setPhotoPlacements((prev) => {
+        const updated = { ...prev, [id]: pl };
+        try {
+          localStorage.setItem(`${LS_PLACEMENTS_KEY}_${project.id}`, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+    const curMasks = photoMasks[id] || [];
+    if (sameMasks(curMasks, step.masks)) return; // placement-only step: no server work needed
+
+    if (step.masks.length === 0) {
+      const resetItem = await api.resetImage(project.id, id);
+      setProject((prev) =>
+        prev ? { ...prev, images: prev.images?.map((img) => (img.id === id ? { ...resetItem, url: `${resetItem.url.split('?')[0]}?t=${Date.now()}` } : img)) } : prev
+      );
+      setPhotoMasks((prev) => ({ ...prev, [id]: [] }));
+    } else {
+      const updated = await api.inpaintImage(project.id, id, 'clean_structure', step.masks);
+      const cacheBusted: ImageItem = {
+        ...updated,
+        processed_url: updated.processed_url ? `${updated.processed_url.split('?')[0]}?t=${Date.now()}` : updated.processed_url,
+      };
+      setProject((prev) =>
+        prev ? { ...prev, images: prev.images?.map((img) => (img.id === id ? cacheBusted : img)) } : prev
+      );
+      setPhotoMasks((prev) => ({ ...prev, [id]: step.masks }));
+    }
+    setPendingMasks((prev) => ({ ...prev, [id]: [] }));
+  };
+
+  const currentSnapshot = (): HistoryStep => ({
+    processed_url: currentImage?.processed_url || null,
+    masks: (currentImage && photoMasks[currentImage.id]) || [],
+    placement: currentImage ? photoPlacements[currentImage.id] || currentPlacement : undefined,
+  });
+
+  // Instant Undo: steps back through every change (healing AND logo position), all the way to the original
   const handleUndo = async () => {
     if (!project || !currentImage || isHealing) return;
-    const currentPhotoMaskList = photoMasks[currentImage.id] || [];
-    const history = photoHistory[currentImage.id];
+    const id = currentImage.id;
+    const currentPhotoMaskList = photoMasks[id] || [];
+    const history = photoHistory[id];
 
-    // Case 1: uncommitted masks if auto-heal was off
-    if (currentPhotoMaskList.length > 0 && !autoHealOnRelease && (!history || history.past.length === 0)) {
-      const updated = currentPhotoMaskList.slice(0, -1);
-      setPhotoMasks((prev) => ({ ...prev, [currentImage.id]: updated }));
+    // Case 1: marked-but-not-erased areas (auto-heal off)
+    if ((pendingMasks[id] || []).length > 0) {
+      setPhotoMasks((prev) => ({ ...prev, [id]: currentPhotoMaskList.slice(0, -1) }));
+      setPendingMasks((prev) => ({ ...prev, [id]: (prev[id] || []).slice(0, -1) }));
       return;
     }
 
-    // Case 2: undo from past inpaint history
     if (!history || history.past.length === 0) return;
-
     const previousStep = history.past[history.past.length - 1];
-    const newPast = history.past.slice(0, -1);
-    const currentStep = {
-      processed_url: currentImage.processed_url || null,
-      masks: currentPhotoMaskList,
-    };
+    const snapshot = currentSnapshot();
 
     setPhotoHistory((prev) => ({
       ...prev,
-      [currentImage.id]: {
-        past: newPast,
-        future: [currentStep, ...(prev[currentImage.id]?.future || [])],
-      },
+      [id]: { past: history.past.slice(0, -1), future: [snapshot, ...(prev[id]?.future || [])] },
     }));
+    lastPlacementPushRef.current = null;
 
     try {
       setIsHealing(true);
-      if (previousStep.masks.length === 0) {
-        // Revert to original upload
-        const resetItem = await api.resetImage(project.id, currentImage.id);
-        setProject((prev) =>
-          prev
-            ? {
-                ...prev,
-                images: prev.images?.map((img) =>
-                  img.id === currentImage.id ? resetItem : img
-                ),
-              }
-            : prev
-        );
-        setPhotoMasks((prev) => ({ ...prev, [currentImage.id]: [] }));
-      } else {
-        const updated = await api.inpaintImage(
-          project.id,
-          currentImage.id,
-          'clean_structure',
-          previousStep.masks
-        );
-        const cacheBusted: ImageItem = {
-          ...updated,
-          processed_url: updated.processed_url
-            ? `${updated.processed_url.split('?')[0]}?t=${Date.now()}`
-            : updated.processed_url,
-        };
-        setProject((prev) =>
-          prev
-            ? {
-                ...prev,
-                images: prev.images?.map((img) =>
-                  img.id === currentImage.id ? cacheBusted : img
-                ),
-              }
-            : prev
-        );
-        setPhotoMasks((prev) => ({
-          ...prev,
-          [currentImage.id]: previousStep.masks,
-        }));
-      }
+      setDirty(true);
+      await restoreStep(previousStep);
     } catch (err: any) {
       setErrorMessage(err.message || 'Undo failed');
     } finally {
@@ -749,56 +872,25 @@ export const SimpleStudio: React.FC = () => {
     }
   };
 
-  // Instant Redo: re-applies undone heal
+  // Instant Redo: re-applies the change that was undone
   const handleRedo = async () => {
     if (!project || !currentImage || isHealing) return;
-    const history = photoHistory[currentImage.id];
+    const id = currentImage.id;
+    const history = photoHistory[id];
     if (!history || history.future.length === 0) return;
 
     const nextStep = history.future[0];
-    const newFuture = history.future.slice(1);
-    const currentPhotoMaskList = photoMasks[currentImage.id] || [];
-    const currentStep = {
-      processed_url: currentImage.processed_url || null,
-      masks: currentPhotoMaskList,
-    };
-
+    const snapshot = currentSnapshot();
     setPhotoHistory((prev) => ({
       ...prev,
-      [currentImage.id]: {
-        past: [...(prev[currentImage.id]?.past || []), currentStep],
-        future: newFuture,
-      },
+      [id]: { past: [...(prev[id]?.past || []), snapshot], future: history.future.slice(1) },
     }));
+    lastPlacementPushRef.current = null;
 
     try {
       setIsHealing(true);
-      const updated = await api.inpaintImage(
-        project.id,
-        currentImage.id,
-        'clean_structure',
-        nextStep.masks
-      );
-      const cacheBusted: ImageItem = {
-        ...updated,
-        processed_url: updated.processed_url
-          ? `${updated.processed_url.split('?')[0]}?t=${Date.now()}`
-          : updated.processed_url,
-      };
-      setProject((prev) =>
-        prev
-          ? {
-              ...prev,
-              images: prev.images?.map((img) =>
-                img.id === currentImage.id ? cacheBusted : img
-              ),
-            }
-          : prev
-      );
-      setPhotoMasks((prev) => ({
-        ...prev,
-        [currentImage.id]: nextStep.masks,
-      }));
+      setDirty(true);
+      await restoreStep(nextStep);
     } catch (err: any) {
       setErrorMessage(err.message || 'Redo failed');
     } finally {
@@ -854,6 +946,36 @@ export const SimpleStudio: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentImage, photoHistory, photoMasks, isHealing, autoHealOnRelease]);
+
+  // Keep the undo history across reloads / closing the app (positions + areas only, small)
+  useEffect(() => {
+    if (!project) return;
+    try {
+      localStorage.setItem(`${LS_HISTORY_KEY}_${project.id}`, JSON.stringify(photoHistory));
+    } catch {}
+  }, [photoHistory, project?.id]);
+
+  // Auto-save every photo's edits to the server shortly after any change, so nothing is lost
+  useEffect(() => {
+    if (!project || images.length === 0) return;
+    const timer = setTimeout(() => {
+      images.forEach((img) => {
+        const pl = photoPlacements[img.id];
+        const mk = photoMasks[img.id];
+        if (!pl || !mk) return;
+        const snap = JSON.stringify([pl, mk]);
+        const prevSaved = lastSavedCfgRef.current[img.id];
+        lastSavedCfgRef.current[img.id] = snap;
+        if (prevSaved === undefined || prevSaved === snap) return;
+        api
+          .updateImageConfig(project.id, img.id, { custom_settings: withLogoFlag(pl), mask_data: mk })
+          .catch(() => {
+            lastSavedCfgRef.current[img.id] = prevSaved; // retry on next change
+          });
+      });
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [photoPlacements, photoMasks, logoEnabled, project?.id]);
 
   // Download All Photos (ZIP) directly to computer
   const handleDownloadZip = () => {
@@ -926,6 +1048,45 @@ export const SimpleStudio: React.FC = () => {
     }
   };
 
+  // Remove (or put back) the logo on ONE photo, even after it was already stamped on it.
+  // Undoable (Undo brings it back) and the saved/processed picture is regenerated right away.
+  const handleToggleLogoThisPhoto = async (show: boolean) => {
+    if (!project || !currentImage || isUpdatingSingle) return;
+    const base = photoPlacements[currentImage.id] || currentPlacement;
+    const newPl: LogoPlacement = { ...base, show_logo: show };
+    if (show) setLogoEnabled(true);
+    handleChangePlacement(newPl);
+    try {
+      setIsUpdatingSingle(true);
+      setErrorMessage(null);
+      await api.updateImageConfig(project.id, currentImage.id, {
+        custom_settings: { ...newPl, show_logo: show },
+        mask_data: photoMasks[currentImage.id] || [],
+      });
+      const updated = await api.applyLogo(project.id, currentImage.id);
+      const bust = (u: string | null | undefined) => (u ? `${u.split('?')[0]}?t=${Date.now()}` : u);
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              images: prev.images?.map((img) =>
+                img.id === currentImage.id
+                  ? { ...updated, processed_url: bust(updated.processed_url) as any, thumbnail_url: bust(updated.thumbnail_url) as string }
+                  : img
+              ),
+            }
+          : prev
+      );
+      setActiveCanvasTool(show ? 'move-logo' : 'view');
+      setSingleUpdateSuccess(show ? `✓ Logo added to Photo #${currentImageIndex + 1}` : `✓ Logo removed from Photo #${currentImageIndex + 1}`);
+      setTimeout(() => setSingleUpdateSuccess(null), 3000);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Could not update logo');
+    } finally {
+      setIsUpdatingSingle(false);
+    }
+  };
+
   const handlePreviewSingle = async () => {
     if (!currentImage) return;
     await handleUpdateSinglePhoto();
@@ -944,7 +1105,7 @@ export const SimpleStudio: React.FC = () => {
     else if (pos === 'bottom-right') { x = 1 - m; y = 1 - m; }
     else { x = 0.5; y = 0.48; }
 
-    handleChangePlacement({ ...currentPlacement, x, y });
+    handleChangePlacement({ ...currentPlacement, x, y, show_logo: true });
     setLogoEnabled(true);
     setActiveCanvasTool('move-logo');
   };
@@ -1282,17 +1443,17 @@ export const SimpleStudio: React.FC = () => {
               <div className="flex-1 relative flex overflow-hidden w-full">
                 {currentImage ? (
                   <StudioCanvas
-                    image={currentImage}
+                    image={canvasImage || currentImage}
                     logo={project?.logo || null}
                     placement={currentPlacement}
                     onChangePlacement={handleChangePlacement}
                     editorMode={activeCanvasTool === 'mark-remove' ? 'mask' : activeCanvasTool === 'move-logo' ? 'placement' : 'view'}
-                    showLogo={logoEnabled && activeCanvasTool === 'move-logo'}
+                    showLogo={logoShownOnThisPhoto && activeCanvasTool === 'move-logo'}
                     activeMaskTool={activeMaskTool}
                     brushSize={brushSize}
                     autoHealOnRelease={autoHealOnRelease}
                     onAutoHeal={handleAutoHeal}
-                    maskRegions={currentMasks}
+                    maskRegions={(currentImage && pendingMasks[currentImage.id]) || []}
                     onAddMaskRegion={handleAddMaskRegion}
                     isHealing={isHealing}
                   />
@@ -1327,6 +1488,22 @@ export const SimpleStudio: React.FC = () => {
                         <RotateCw className="w-3.5 h-3.5 text-savecus-400" />
                       )}
                       <span className="hidden sm:inline">Rotate 90° ↻</span>
+                    </button>
+
+                    {/* Remove / add the logo on this one photo */}
+                    <button
+                      type="button"
+                      disabled={isUpdatingSingle}
+                      onClick={() => handleToggleLogoThisPhoto(!logoShownOnThisPhoto)}
+                      className={`min-h-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-sm ${
+                        logoShownOnThisPhoto
+                          ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                          : 'bg-savecus-500/15 border-savecus-500/40 text-savecus-300'
+                      }`}
+                      title={logoShownOnThisPhoto ? 'Remove the logo from this photo' : 'Put the logo back on this photo'}
+                    >
+                      {logoShownOnThisPhoto ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                      <span>{logoShownOnThisPhoto ? 'Remove Logo' : 'Add Logo'}</span>
                     </button>
 
                     {/* Preview this photo as it will be saved */}
@@ -1625,10 +1802,11 @@ export const SimpleStudio: React.FC = () => {
 
                   {/* Uploaded Custom Logo Card (if any exists) */}
                   {customLogoItem && (
+                    <div className="flex items-stretch gap-2">
                     <button
                       type="button"
                       onClick={handleSelectCustomLogo}
-                      className={`w-full min-h-[64px] p-3 rounded-2xl flex items-center justify-between gap-3 cursor-pointer border-2 transition-all active:scale-98 ${
+                      className={`flex-1 min-w-0 min-h-[64px] p-3 rounded-2xl flex items-center justify-between gap-3 cursor-pointer border-2 transition-all active:scale-98 ${
                         logoEnabled && activeLogoChoice === 'custom'
                           ? 'bg-savecus-500/20 border-savecus-500 shadow-xl ring-2 ring-savecus-500/40'
                           : 'bg-charcoal-100 border-surface-border hover:border-slate-400'
@@ -1661,6 +1839,16 @@ export const SimpleStudio: React.FC = () => {
                         </span>
                       )}
                     </button>
+                    <button
+                      type="button"
+                      onClick={handleRemoveCustomLogo}
+                      className="w-14 shrink-0 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-300 flex items-center justify-center active:scale-95"
+                      aria-label="Remove uploaded logo"
+                      title="Remove this uploaded logo"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                    </div>
                   )}
 
                   {/* Big Tactile Upload Button for Custom Logo */}

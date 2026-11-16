@@ -62,6 +62,35 @@ class SnapseedHealingInpainter(BaseInpainter):
         feather = cv2.GaussianBlur(mask_roi.astype(np.float32) / 255.0, (7, 7), 0)[:, :, None]
         return (bilat.astype(np.float32) * feather + img_roi.astype(np.float32) * (1.0 - feather)).astype(np.uint8)
 
+    def _heal_texture_roi(self, img_roi: np.ndarray, mask_roi: np.ndarray, radius: int) -> np.ndarray:
+        """
+        Snapseed-style healing for brush strokes: instead of smoothing (blur), synthesize real
+        fabric texture from the surrounding area (patch-based shift-map), then keep only that
+        texture's fine detail and re-anchor its colours/gradients to a smooth fill so there is no
+        colour jump at the edge. Falls back to the smooth multi-scale fill if unavailable.
+        """
+        xphoto = getattr(cv2, "xphoto", None)
+        valid = int(np.count_nonzero(mask_roi == 0))
+        if xphoto is None or valid < 0.25 * mask_roi.size:
+            return self._inpaint_roi_multiscale(img_roi, mask_roi, radius)
+        try:
+            known = np.where(mask_roi > 0, 0, 255).astype(np.uint8)
+            textured = np.zeros_like(img_roi)
+            xphoto.inpaint(img_roi, known, textured, xphoto.INPAINT_SHIFTMAP)
+            smooth = cv2.inpaint(img_roi, mask_roi, 5, cv2.INPAINT_TELEA)
+
+            area = float(np.count_nonzero(mask_roi))
+            sigma = max(2.5, 0.8 * max(3.0, np.sqrt(area) / 6.0))
+            lo_tex = cv2.GaussianBlur(textured.astype(np.float32), (0, 0), sigma)
+            lo_smooth = cv2.GaussianBlur(smooth.astype(np.float32), (0, 0), sigma)
+            healed = np.clip(lo_smooth + (textured.astype(np.float32) - lo_tex), 0, 255)
+
+            feather = cv2.GaussianBlur((mask_roi > 0).astype(np.float32), (0, 0), 1.5)[:, :, None]
+            out = healed * feather + img_roi.astype(np.float32) * (1.0 - feather)
+            return out.astype(np.uint8)
+        except Exception:
+            return self._inpaint_roi_multiscale(img_roi, mask_roi, radius)
+
     def _inpaint_box_exemplar(
         self,
         img: np.ndarray,
@@ -207,8 +236,11 @@ class SnapseedHealingInpainter(BaseInpainter):
                 max_d = float(np.max(dist)) if dist.size > 0 else 3.0
                 radius = int(np.clip(max_d * 1.5 + 2, 3, 20))
                 
-                healed_roi = self._inpaint_roi_multiscale(result[y1:y2, x1:x2], comp_mask[y1:y2, x1:x2], radius)
-                result[y1:y2, x1:x2] = healed_roi
+                pad_tex = max(pad, int(max_d * 3) + 24)
+                ty1, ty2 = max(0, y - pad_tex), min(h, y + rh + pad_tex)
+                tx1, tx2 = max(0, x - pad_tex), min(w, x + rw + pad_tex)
+                healed_roi = self._heal_texture_roi(result[ty1:ty2, tx1:tx2], comp_mask[ty1:ty2, tx1:tx2], radius)
+                result[ty1:ty2, tx1:tx2] = healed_roi
                 
         return result
 

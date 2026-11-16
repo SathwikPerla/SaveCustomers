@@ -1,11 +1,19 @@
+# Render.com Blueprint — New + > Blueprint > pick this repo. Free plan, fixed URL:
+#   https://savecus-rebrand-studio.onrender.com  (Render adds a suffix if that name is taken)
 services:
   - type: web
     name: savecus-rebrand-studio
-    env: docker
-    dockerfilePath: Dockerfile
+    runtime: docker
+    dockerfilePath: ./Dockerfile
     plan: free
-    region: oregon
+    region: singapore          # closest Render region to India -> faster uploads
+    branch: main
+    autoDeploy: true           # every push to main redeploys automatically
+    healthCheckPath: /api/health
     envVars:
       - key: PORT
         value: 8000
-
+      - key: MAX_IMAGE_SIDE    # big camera photos are scaled to this (keeps the free 512 MB server safe)
+        value: 3000
+      - key: ACCESS_KEY        # private code; Render asks you to type it on first deploy
+        sync: false

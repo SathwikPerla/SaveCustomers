@@ -50,5 +50,6 @@ backend/data/logos/*_*.*
 !backend/data/logos/orange_savecus_logo.png
 !backend/data/logos/white_bg_savecus_logo.png
 !backend/data/logos/red_bg_savecus_logo.png
+!backend/data/logos/yellow_bg_savecus_logo.png
 !backend/data/logos/.gitkeep
 
