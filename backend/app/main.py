@@ -79,7 +79,7 @@ input,button{font-size:18px;padding:14px;border-radius:14px;border:1px solid #44
 input{background:#1e1d19;color:#fff}button{background:#eab308;color:#111;font-weight:800;border:0}
 p{color:#f87171;margin:0}</style></head><body>
 <form method="get" action="/"><h2 style="margin:0">Enter access code</h2>__ERR__
-<input name="key" autocomplete="current-password" placeholder="Access code" autofocus>
+<input name="key" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" placeholder="Access code" autofocus>
 <button type="submit">Open studio</button></form></body></html>"""
 
 
